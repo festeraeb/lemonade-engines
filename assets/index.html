@@ -59,6 +59,15 @@ a { color: var(--accent); }
 .licence { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
 .licence p { margin: 0; }
 .note { font-size: 13px; color: var(--muted); margin: 0; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
+.steps li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.steps .st { font: 12px var(--mono); min-width: 7ch; color: var(--muted); }
+.steps .done .st { color: var(--ok); } .steps .run .st { color: var(--warn); } .steps .fail .st { color: var(--bad); }
+.steps .msg { color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
+button.big { font-size: 15px; padding: 8px 18px; }
+details.more summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details.more[open] summary { margin-bottom: 8px; }
+.ready { color: var(--ok); font-weight: 600; font-size: 14px; }
 footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
 @media (prefers-reduced-motion: no-preference) { .eng { transition: border-color .2s; } }
 </style>
@@ -66,7 +75,7 @@ footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
 <body>
 <div class="wrap">
   <h1>Lemonade Engines</h1>
-  <p class="lead">Add engines to the Lemonade you already run. Each engine runs as its own server on this computer and joins Lemonade as a provider, so its models show up in Lemonade's list and work in every app that talks to Lemonade.</p>
+  <p class="lead">Add engines to the Lemonade you already run. Each engine runs as its own server on this computer and joins Lemonade as a provider, so its models show up in Lemonade's list and work in every app that talks to Lemonade. Press <b>Set up</b> on an engine: it installs it, starts it, adds it to Lemonade and asks it one test question, and shows each step as it goes.</p>
   <div class="bar" id="bar"><span><span class="dot" id="ldot"></span><b>Lemonade</b> <span id="lstat">checking…</span></span><span class="id" id="lurl"></span></div>
   <div class="engines" id="engines"><p class="note">Loading the engine list…</p></div>
   <footer>Engines listen on 127.0.0.1 only. Lemonade is not modified: registering an engine is the same as <code>lemonade cloud install &lt;name&gt; --base-url http://127.0.0.1:&lt;port&gt;/v1</code>.</footer>
@@ -76,6 +85,51 @@ const $ = (s, el = document) => el.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const results = {};
 let busy = {};
+
+const setups = {};  // id -> [{act, label, status: "wait"|"run"|"done"|"fail", msg}]
+const STEP_LABEL = {install: "Install the files", start: "Start the server", check: "Find the running server", register: "Add to Lemonade", test: "Ask a test question"};
+
+async function post(id, act, body) {
+  const action = act === "check" ? "start" : act;
+  try {
+    const r = await fetch(`/api/engines/${id}/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+    return await r.json().catch(() => ({ok: false, error: `HTTP ${r.status}`}));
+  } catch (e) { return {ok: false, error: String(e)}; }
+}
+
+// One click: run only the steps this engine still needs, in order, stopping at the first failure.
+async function setup(id, accept) {
+  const x = lastState.engines.find(v => v.engine.id === id); if (!x) return;
+  const e = x.engine, steps = [];
+  if (e.mode === "managed" && !x.installed) steps.push("install");
+  if (!x.up) steps.push(e.mode === "attach" ? "check" : "start");
+  if (!x.registered) steps.push("register");
+  steps.push("test");
+  setups[id] = steps.map(act => ({act, label: STEP_LABEL[act], status: "wait", msg: ""}));
+  busy[id] = "setup"; delete results[id]; render(lastState);
+  for (const st of setups[id]) {
+    st.status = "run"; render(lastState);
+    const j = await post(id, st.act, st.act === "install" && accept ? {accept_licence: true} : undefined);
+    if (!j.ok) {
+      st.status = "fail";
+      st.msg = j.error || "failed";
+      if (st.act === "check" && e.get_url) st.msg += ` This engine installs itself; use "Get it", start it, then press Set up again.`;
+      break;
+    }
+    st.status = "done";
+    st.msg = st.act === "test" ? "" : (j.message || "");
+    if (st.act === "test") results[id] = {action: "test", ...j};
+    render(lastState);
+  }
+  delete busy[id];
+  await refresh(true);
+}
+
+function stepList(id) {
+  const st = setups[id]; if (!st) return "";
+  const word = {wait: "waiting", run: "working", done: "done", fail: "failed"};
+  return `<ol class="steps" aria-live="polite">${st.map(s => `<li class="${s.status}"><span class="st">${word[s.status]}</span><span>${esc(s.label)}${s.msg ? ` <span class="msg">${esc(s.msg)}</span>` : ""}</span></li>`).join("")}</ol>`;
+}
 
 async function call(id, action, body) {
   busy[id] = action; render(lastState);
@@ -94,7 +148,7 @@ function resultBox(id) {
   if (r.action === "test") {
     const u = r.usage || {};
     const tok = u.completion_tokens ? `, ${u.completion_tokens} tokens, ${(u.completion_tokens / r.seconds).toFixed(1)} tok/s end to end` : "";
-    return `<div class="out">through Lemonade as <b>${esc(r.model)}</b> (answered by ${esc(r.served_by)}) in ${r.seconds.toFixed(1)} s${tok}<span class="answer">${esc(r.answer)}</span></div>`;
+    return `<div class="out">through Lemonade as <b>${esc(r.model)}</b> (answered by ${esc(r.served_by)}) in ${r.seconds.toFixed(1)} s${tok}<span class="answer">${r.answer && r.answer.trim() ? esc(r.answer) : "The model returned no visible text (it may have spent its tokens on reasoning)."}</span></div>`;
   }
   return `<div class="out">${esc(r.message)}${r.models ? "\n" + r.models.map(esc).join("\n") : ""}</div>`;
 }
@@ -116,29 +170,35 @@ function render(s) {
       needAccept ? `<span class="chip warn">licence not accepted</span>` : "",
     ].join("");
     const dis = c => (b || c) ? "disabled" : "";
-    const licence = needAccept ? `<div class="licence"><p><b>${esc(e.name)}</b> is under the ${esc(e.licence)}.${e.licence_url ? ` <a href="${esc(e.licence_url)}" target="_blank" rel="noopener">Read the licence</a>.` : ""} It is not bundled; accepting lets this computer fetch and run it.</p><div class="actions"><button class="primary" data-act="install" data-id="${id}" data-accept="1" ${dis()}>Accept and continue</button></div></div>` : "";
-    const actions = needAccept ? "" : `<div class="actions">
-      ${e.mode === "managed" ? `<button data-act="install" data-id="${id}" ${dis(x.installed)}>${b === "install" ? "Installing…" : "Install"}</button>` : ""}
+    const ready = x.up && x.registered;
+    const licence = needAccept ? `<div class="licence"><p><b>${esc(e.name)}</b> is under the ${esc(e.licence)}.${e.licence_url ? ` <a href="${esc(e.licence_url)}" target="_blank" rel="noopener">Read the licence</a>.` : ""} It is not bundled; accepting lets this computer fetch and run it.</p><div class="actions"><button class="primary big" data-act="setup" data-id="${id}" data-accept="1" ${dis()}>${b === "setup" ? "Setting up…" : "Accept and set up"}</button></div></div>` : "";
+    const main = needAccept ? "" : `<div class="actions">
+      ${ready ? `<span class="ready">Ready in Lemonade</span>` : ""}
+      <button class="primary big" data-act="${ready ? "test" : "setup"}" data-id="${id}" ${dis()}>${b === "setup" ? "Setting up…" : b === "test" ? "Asking…" : ready ? "Test a chat" : "Set up"}</button>
       ${e.get_url && !x.up ? `<a href="${esc(e.get_url)}" target="_blank" rel="noopener"><button tabindex="-1">Get it</button></a>` : ""}
+    </div>`;
+    const steps = needAccept ? "" : `<details class="more"><summary>Individual steps</summary><div class="actions">
+      ${e.mode === "managed" ? `<button data-act="install" data-id="${id}" ${dis(x.installed)}>${b === "install" ? "Installing…" : "Install"}</button>` : ""}
       <button data-act="start" data-id="${id}" ${dis(e.mode === "managed" && !x.installed)}>${b === "start" ? "Starting…" : (e.mode === "attach" ? "Check server" : (x.up ? "Running" : "Start"))}</button>
-      <button class="${x.registered ? "" : "primary"}" data-act="register" data-id="${id}" ${dis(!x.up)}>${b === "register" ? "Registering…" : (x.registered ? "Register again" : "Add to Lemonade")}</button>
-      <button class="${x.registered ? "primary" : ""}" data-act="test" data-id="${id}" ${dis(!x.registered)}>${b === "test" ? "Asking…" : "Test a chat"}</button>
+      <button data-act="register" data-id="${id}" ${dis(!x.up)}>${b === "register" ? "Registering…" : (x.registered ? "Register again" : "Add to Lemonade")}</button>
+      <button data-act="test" data-id="${id}" ${dis(!x.registered)}>${b === "test" ? "Asking…" : "Test a chat"}</button>
       ${x.registered ? `<button data-act="unregister" data-id="${id}" ${dis()}>Remove from Lemonade</button>` : ""}
       ${x.running_here ? `<button data-act="stop" data-id="${id}" ${dis()}>Stop</button>` : ""}
-    </div>`;
+    </div></details>`;
     return `<section class="eng" aria-labelledby="h-${id}">
       <div class="head"><h2 id="h-${id}">${esc(e.name)}</h2><span class="id">${esc(id)}</span></div>
       <p class="sum">${esc(e.summary)}</p>
       <dl class="meta"><dt>Licence</dt><dd>${esc(e.licence)}</dd>${e.hardware ? `<dt>Needs</dt><dd>${esc(e.hardware)}</dd>` : ""}${x.base ? `<dt>Address</dt><dd>${esc(x.base)}/v1</dd>` : ""}</dl>
       ${e.note ? `<p class="note">${esc(e.note)}</p>` : ""}
-      <div class="chips">${chips}</div>${licence}${actions}${resultBox(id)}
+      <div class="chips">${chips}</div>${licence}${main}${stepList(id)}${resultBox(id)}${steps}
     </section>`;
   }).join("");
 }
 
 document.addEventListener("click", ev => {
   const btn = ev.target.closest("button[data-act]"); if (!btn || btn.disabled) return;
-  call(btn.dataset.id, btn.dataset.act, btn.dataset.accept ? {accept_licence: true} : undefined);
+  if (btn.dataset.act === "setup") setup(btn.dataset.id, !!btn.dataset.accept);
+  else call(btn.dataset.id, btn.dataset.act, btn.dataset.accept ? {accept_licence: true} : undefined);
 });
 
 let lastJson = "";

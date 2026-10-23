@@ -403,6 +403,19 @@ async fn test(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Respon
     }
 }
 
+/// One click: double-clicking the binary opens the page. Failure to open is not fatal; the address is printed.
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let r = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(url).spawn();
+    if let Err(e) = r {
+        println!("could not open a browser ({e}); open {url} yourself");
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let env = |k: &str, d: &str| std::env::var(k).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
@@ -427,6 +440,9 @@ async fn main() {
     let addr: SocketAddr = env("LE_LISTEN", "127.0.0.1:13500").parse().expect("LE_LISTEN");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     println!("lemonade-engines on http://{addr}");
+    if std::env::var_os("LE_NO_BROWSER").is_none() {
+        open_browser(&format!("http://{addr}"));
+    }
     axum::serve(listener, router).with_graceful_shutdown(shutdown_signal()).await.expect("serve");
     // Engines started here stop with lemonade-engines; a stopped add-on must not leave servers running.
     let children: Vec<_> = app.children.lock().await.drain().collect();
