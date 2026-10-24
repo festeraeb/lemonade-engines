@@ -26,7 +26,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::{process::Command, sync::Mutex};
+use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 
 const PAGE: &str = include_str!("../assets/index.html");
 const DEFAULT_CATALOG: &str = include_str!("../assets/engines.toml");
@@ -219,20 +219,35 @@ async fn fetch(app: &App, f: &FileSpec, dir: &Path) -> Result<(), String> {
     if let Some(path) = f.source.strip_prefix("file://") {
         copy_path(Path::new(path), &dst).await?;
     } else if f.source.starts_with("https://") {
-        let r = app.http.get(&f.source).send().await.map_err(|e| format!("download {}: {e}", f.source))?;
+        // Stream to a temporary file while hashing, so a 1 GB model never sits in memory;
+        // the file only takes its real name once the checksum (when given) matches.
+        let mut r = app.http.get(&f.source).send().await.map_err(|e| format!("download {}: {e}", f.source))?;
         if !r.status().is_success() { return Err(format!("download {}: HTTP {}", f.source, r.status())); }
-        let bytes = r.bytes().await.map_err(|e| e.to_string())?;
-        if let Some(want) = &f.sha256 {
-            let got = format!("{:x}", Sha256::digest(&bytes));
-            if !got.eq_ignore_ascii_case(want) { return Err(format!("{}: sha256 {got} does not match {want}", f.source)); }
+        let tmp = dst.with_extension("part");
+        let mut out = tokio::fs::File::create(&tmp).await.map_err(|e| e.to_string())?;
+        let mut hasher = Sha256::new();
+        while let Some(chunk) = r.chunk().await.map_err(|e| format!("download {}: {e}", f.source))? {
+            hasher.update(&chunk);
+            out.write_all(&chunk).await.map_err(|e| e.to_string())?;
         }
-        tokio::fs::write(&dst, &bytes).await.map_err(|e| e.to_string())?;
+        out.flush().await.map_err(|e| e.to_string())?;
+        drop(out);
+        if let Some(want) = &f.sha256 {
+            let got = format!("{:x}", hasher.finalize());
+            if !got.eq_ignore_ascii_case(want) {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(format!("{}: sha256 {got} does not match {want}", f.source));
+            }
+        }
+        tokio::fs::rename(&tmp, &dst).await.map_err(|e| e.to_string())?;
     } else {
         return Err(format!("unsupported source {}", f.source));
     }
     if f.dest.ends_with(".tar.gz") {
         let st = Command::new("tar").arg("xzf").arg(&dst).arg("-C").arg(dir).status().await.map_err(|e| e.to_string())?;
         if !st.success() { return Err(format!("unpacking {} failed", f.dest)); }
+        // Keep an empty marker under the archive's name (install skips files that exist) instead of a second copy on disk.
+        tokio::fs::write(&dst, b"").await.map_err(|e| e.to_string())?;
     }
     Ok(())
 }

@@ -24,12 +24,22 @@ each step. The individual steps are still available under "Individual steps".
 | `LE_HOME` | `~/.local/share/lemonade-engines` | Where engines are installed |
 | `LE_NO_BROWSER` | unset | Set to skip opening the browser |
 
+## Download
+
+Prebuilt Linux x86-64 binaries (glibc 2.30 or newer, built on Ubuntu 20.04) are on the
+[releases page](https://github.com/festeraeb/lemonade-engines/releases). Unpack and run
+`./lemonade-engines`. The page then opens in your browser.
+
 ## Status
 
-Tested on 2026-10-23 with Lemonade 2026.41.1: an attached llama.cpp server was registered and
-answered a chat through Lemonade from the Set up button. The built-in `burn` entry still installs
-from local staging paths, so it only works on the machine that built it until release files are
-published.
+Tested on 2026-10-24 with Lemonade 2026.41.1 and these exact binaries. The `burn` engine was
+installed from its release archives, started, added to Lemonade and answered a chat through
+Lemonade. Downloads stream to disk and are checked against the sha256 in the catalogue. A wrong
+checksum was rejected and left nothing behind. An attached llama.cpp server was also registered
+and answered from the Set up button (2026-10-23).
+
+The `strata` and `icedlemcake` entries attach to servers you start yourself. The `cake` entry's
+preload command points at a local Cake build path, so it needs editing on other machines.
 
 ## Licence
 

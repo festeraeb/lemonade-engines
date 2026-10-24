@@ -16,18 +16,20 @@ id = "burn"
 name = "lemonade-burn"
 summary = "Microsoft BitNet b1.58 2B4T with a packed 2-bit ternary kernel. Runs on any recent x86-64 CPU; no GPU needed."
 licence = "MIT OR Apache-2.0 (BitNet weights: MIT)"
-hardware = "x86-64 CPU with AVX2 (AVX-512 used when present), about 2 GB RAM"
+hardware = "Linux x86-64 (glibc 2.30 or newer) with AVX2 (AVX-512 used when present), about 2 GB RAM; 0.9 GB download"
 mode = "managed"
 port = 13431
 test_model = "bitnet-b1.58-2B-4T"
 args = ["--host", "127.0.0.1", "--port", "{port}", "--model", "{dir}/bitnet-b1.58-2B-4T-lbt", "--model-id", "bitnet-b1.58-2B-4T"]
 exe = "lemonade-burn-server"
 [[engine.files]]
-source = "file:///home/cesarops/engine-staging/burn/lemonade-burn-server"
-dest = "lemonade-burn-server"
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.0/lemonade-burn-server-0.1.0-x86_64-linux.tar.gz"
+dest = "lemonade-burn-server-0.1.0-x86_64-linux.tar.gz"
+sha256 = "043a83be7ba4a12f780bfa0f4d0cb2978bd2f218e7539ac1c1dbeb5dcf417c17"
 [[engine.files]]
-source = "file:///home/cesarops/engine-staging/burn/bitnet-b1.58-2B-4T-lbt"
-dest = "bitnet-b1.58-2B-4T-lbt"
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.0/bitnet-b1.58-2B-4T-lbt.tar.gz"
+dest = "bitnet-b1.58-2B-4T-lbt.tar.gz"
+sha256 = "2e869bf83ef7d215de6377dcc2f8468083568fba70016a4ec24cc1acca39dc86"
 
 [[engine]]
 id = "icedlemcake"
