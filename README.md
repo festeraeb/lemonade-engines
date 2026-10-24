@@ -26,20 +26,30 @@ each step. The individual steps are still available under "Individual steps".
 
 ## Download
 
-Prebuilt Linux x86-64 binaries (glibc 2.30 or newer, built on Ubuntu 20.04) are on the
-[releases page](https://github.com/festeraeb/lemonade-engines/releases). Unpack and run
-`./lemonade-engines`. The page then opens in your browser.
+Builds for Linux x86-64 (glibc 2.30 or newer), Windows x86-64 and macOS (Intel and Apple silicon)
+are on the [releases page](https://github.com/festeraeb/lemonade-engines/releases); GitHub Actions
+builds them from each tag. Unpack and run `lemonade-engines`. The page then opens in your browser.
+
+## Engines
+
+| Engine | What Set up does | Platforms |
+|---|---|---|
+| lemonade-burn | Downloads the server for this computer and the BitNet model (sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows, macOS |
+| Strata | Runs Strata's own signed installer into the engine folder, shows the plan (model and download size) and waits for **Download and start**, then serves through `strata launch` | Linux x86-64, Apple silicon Mac |
+| Extended Lemonade server, Cake | Attach to a server you already run at 127.0.0.1:13410; not packaged yet | |
 
 ## Status
 
-Tested on 2026-10-24 with Lemonade 2026.41.1 and these exact binaries. The `burn` engine was
-installed from its release archives, started, added to Lemonade and answered a chat through
-Lemonade. Downloads stream to disk and are checked against the sha256 in the catalogue. A wrong
-checksum was rejected and left nothing behind. An attached llama.cpp server was also registered
-and answered from the Set up button (2026-10-23).
+Tested on 2026-10-24 with Lemonade 2026.41.1 on Linux x86-64, through the page in a browser:
 
-The `strata` and `icedlemcake` entries attach to servers you start yourself. The `cake` entry's
-preload command points at a local Cake build path, so it needs editing on other machines.
+- lemonade-burn: installed from the release, started, added to Lemonade and answered a chat.
+  Downloads stream to disk and are checked against the catalogue's sha256; a wrong checksum is
+  rejected and leaves nothing behind.
+- Strata: installed with its signed installer and showed its plan (an 84 GB model on the test
+  machine). Downloading the model and serving were not run in this test, so Start and Stop for
+  Strata are untested.
+- The Windows and macOS builds of both programs compile and package in CI; they have not been run
+  on those systems yet.
 
 ## Licence
 

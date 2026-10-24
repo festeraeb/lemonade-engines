@@ -67,6 +67,21 @@ struct Engine {
     get_url: Option<String>,
     #[serde(default)]
     note: Option<String>,
+    /// Environment for install commands, plan, start and stop; {dir} and {port} are filled in.
+    #[serde(default)]
+    env: std::collections::BTreeMap<String, String>,
+    /// Command path per platform when it differs from `exe` (e.g. a .cmd on Windows).
+    #[serde(default)]
+    exe_platform: std::collections::BTreeMap<String, String>,
+    /// Shown to the user and accepted before the first start (for engines that download a lot then).
+    #[serde(default)]
+    plan_args: Vec<String>,
+    /// Run instead of killing the process on Stop (for engines that serve in the background).
+    #[serde(default)]
+    stop_args: Vec<String>,
+    /// How long Start waits for /v1/models, in seconds (default 120).
+    #[serde(default)]
+    start_wait_s: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -75,6 +90,30 @@ struct FileSpec {
     dest: String,
     #[serde(default)]
     sha256: Option<String>,
+    /// e.g. "x86_64-linux", "x86_64-windows", "aarch64-macos"; files without one apply everywhere.
+    #[serde(default)]
+    platform: Option<String>,
+    /// Command run after the file is in place (e.g. an installer script); {dir} is filled in.
+    #[serde(default)]
+    run: Vec<String>,
+}
+
+/// This computer, in the form catalogue files use: "<arch>-<os>".
+fn this_platform() -> String {
+    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
+}
+
+impl Engine {
+    /// Files to install here: the platform-neutral ones plus those built for this computer.
+    fn files_here(&self) -> Vec<&FileSpec> {
+        let here = this_platform();
+        self.files.iter().filter(|f| f.platform.as_deref().map_or(true, |p| p == here)).collect()
+    }
+    /// A managed engine with platform-specific files is only available where one of them matches.
+    fn available_here(&self) -> bool {
+        let specific: Vec<_> = self.files.iter().filter_map(|f| f.platform.as_deref()).collect();
+        specific.is_empty() || specific.contains(&this_platform().as_str())
+    }
 }
 
 struct App {
@@ -108,8 +147,24 @@ impl App {
         }
     }
 
+    fn fill(&self, e: &Engine, s: &str) -> String {
+        s.replace("{dir}", &self.dir(&e.id).to_string_lossy()).replace("{port}", &e.port.unwrap_or(0).to_string())
+    }
+    fn exe_path(&self, e: &Engine) -> PathBuf {
+        let rel = e.exe_platform.get(&this_platform()).or(e.exe.as_ref()).cloned().unwrap_or_else(|| e.id.clone());
+        let mut exe = self.dir(&e.id).join(rel);
+        if cfg!(windows) && exe.extension().is_none() { exe.set_extension("exe"); }
+        exe
+    }
+    /// A command for this engine: its folder as working directory and its environment filled in.
+    fn command(&self, e: &Engine, program: impl AsRef<std::ffi::OsStr>, args: &[String]) -> Command {
+        let mut c = Command::new(program);
+        c.args(args.iter().map(|a| self.fill(e, a))).current_dir(self.dir(&e.id)).stdin(Stdio::null());
+        for (k, v) in &e.env { c.env(k, self.fill(e, v)); }
+        c
+    }
     fn installed(&self, e: &Engine) -> bool {
-        e.mode == "attach" || e.files.iter().all(|f| self.dir(&e.id).join(&f.dest).exists())
+        e.mode == "attach" || (e.available_here() && e.files_here().iter().all(|f| self.dir(&e.id).join(&f.dest).exists()))
     }
 
     async fn lemonade_cli(&self, args: &[&str]) -> Result<String, String> {
@@ -192,15 +247,23 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
             "engine": e, "installed": app.installed(e), "up": up, "running_here": running_here,
             "registered": registered, "models": models, "base": base,
             "accepted": app.dir(&e.id).join("licence-accepted").exists(),
+            "available": e.mode == "attach" || e.available_here(),
+            "plan_accepted": e.plan_args.is_empty() || app.dir(&e.id).join("plan-accepted").exists(),
         }));
     }
-    Json(json!({"lemonade": {"url": app.lemonade, "ok": lemonade_ok, "version": version}, "engines": engines}))
+    Json(json!({"lemonade": {"url": app.lemonade, "ok": lemonade_ok, "version": version}, "platform": this_platform(), "engines": engines}))
 }
 
 #[derive(Deserialize, Default)]
 struct InstallReq {
     #[serde(default)]
     accept_licence: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StartReq {
+    #[serde(default)]
+    accept_plan: bool,
 }
 
 async fn copy_path(src: &Path, dst: &Path) -> Result<(), String> {
@@ -213,7 +276,7 @@ async fn copy_path(src: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
-async fn fetch(app: &App, f: &FileSpec, dir: &Path) -> Result<(), String> {
+async fn fetch(app: &App, e: &Engine, f: &FileSpec, dir: &Path) -> Result<(), String> {
     let dst = dir.join(&f.dest);
     if let Some(p) = dst.parent() { tokio::fs::create_dir_all(p).await.map_err(|e| e.to_string())?; }
     if let Some(path) = f.source.strip_prefix("file://") {
@@ -249,7 +312,24 @@ async fn fetch(app: &App, f: &FileSpec, dir: &Path) -> Result<(), String> {
         // Keep an empty marker under the archive's name (install skips files that exist) instead of a second copy on disk.
         tokio::fs::write(&dst, b"").await.map_err(|e| e.to_string())?;
     }
+    if let Some((prog, args)) = f.run.split_first() {
+        let log = dir.join("install.log");
+        let out = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+        let st = app.command(e, app.fill(e, prog), args).stdout(out.try_clone().map_err(|e| e.to_string())?).stderr(out).status().await;
+        if !matches!(st, Ok(s) if s.success()) {
+            // Remove the file so the next Install runs the command again.
+            let _ = tokio::fs::remove_file(&dst).await;
+            return Err(format!("{} failed: {}", f.dest, tail(&log, 3)));
+        }
+    }
     Ok(())
+}
+
+/// Last `n` non-empty lines of a log file, joined with " | ".
+fn tail(path: &Path, n: usize) -> String {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 
 async fn install(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<InstallReq>>) -> Response {
@@ -266,10 +346,13 @@ async fn install(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: 
     if e.mode == "attach" {
         return Json(json!({"ok": true, "message": "Nothing to install: this engine runs as its own server. Start it, then register it."})).into_response();
     }
+    if !e.available_here() {
+        return err(StatusCode::NOT_IMPLEMENTED, format!("{} has no build for this computer ({}) yet.", e.name, this_platform()));
+    }
     let t0 = Instant::now();
-    for f in &e.files {
+    for f in e.files_here() {
         if dir.join(&f.dest).exists() { continue; }
-        if let Err(m) = fetch(&app, f, &dir).await { return err(StatusCode::BAD_GATEWAY, m); }
+        if let Err(m) = fetch(&app, &e, f, &dir).await { return err(StatusCode::BAD_GATEWAY, m); }
     }
     Json(json!({"ok": true, "message": format!("Installed in {} ({:.1} s)", dir.display(), t0.elapsed().as_secs_f32())})).into_response()
 }
@@ -285,7 +368,7 @@ async fn wait_up(app: &App, base: &str, secs: u64) -> bool {
     false
 }
 
-async fn start(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+async fn start(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<StartReq>>) -> Response {
     let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let Some(base) = app.base(&e) else { return err(StatusCode::BAD_REQUEST, "engine has no address") };
     if e.mode == "attach" {
@@ -300,23 +383,45 @@ async fn start(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Respo
         return Json(json!({"ok": true, "message": format!("Already running at {base}")})).into_response();
     }
     let dir = app.dir(&id);
-    let port = e.port.unwrap_or(0).to_string();
-    let args: Vec<String> = e.args.iter().map(|a| a.replace("{port}", &port).replace("{dir}", &dir.to_string_lossy())).collect();
-    let exe = dir.join(e.exe.as_deref().unwrap_or(&e.id));
+    if !e.plan_args.is_empty() && !dir.join("plan-accepted").exists() {
+        if !body.map(|b| b.0).unwrap_or_default().accept_plan {
+            return (StatusCode::CONFLICT, Json(json!({"ok": false, "needs_plan": true, "error": "Review what it will download first."}))).into_response();
+        }
+        let _ = std::fs::write(dir.join("plan-accepted"), "");
+    }
+    let exe = app.exe_path(&e);
+    #[cfg(unix)]
     let _ = Command::new("chmod").arg("+x").arg(&exe).status().await;
     let log = match std::fs::File::create(dir.join("engine.log")) { Ok(f) => f, Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()) };
-    let mut cmd = Command::new(&exe);
-    cmd.args(&args).current_dir(&dir).stdin(Stdio::null()).stdout(log.try_clone().unwrap()).stderr(log).kill_on_drop(true);
+    let mut cmd = app.command(&e, &exe, &e.args);
+    cmd.stdout(log.try_clone().unwrap()).stderr(log).kill_on_drop(e.stop_args.is_empty());
     // Own process group, so stopping the engine also stops anything it started.
     #[cfg(unix)]
     cmd.process_group(0);
-    let child = cmd.spawn();
-    let child = match child { Ok(c) => c, Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not start {}: {e}", exe.display())) };
+    let child = match cmd.spawn() { Ok(c) => c, Err(x) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("could not start {}: {x}", exe.display())) };
     app.children.lock().await.insert(id.clone(), child);
-    if wait_up(&app, &base, 120).await {
-        Json(json!({"ok": true, "message": format!("Running at {base}")})).into_response()
-    } else {
-        err(StatusCode::GATEWAY_TIMEOUT, format!("Started, but {base}/v1/models did not answer within 120 s. See {}/engine.log", dir.display()))
+    let wait = e.start_wait_s.unwrap_or(120);
+    let t0 = Instant::now();
+    loop {
+        if wait_up(&app, &base, 1).await {
+            return Json(json!({"ok": true, "message": format!("Running at {base}")})).into_response();
+        }
+        // A launcher may hand the server to a background service and exit 0; keep waiting then.
+        let exited = {
+            let mut kids = app.children.lock().await;
+            match kids.get_mut(&id).map(|c| c.try_wait()) {
+                Some(Ok(Some(st))) => { kids.remove(&id); Some(st.success()) }
+                None => Some(false), // stopped from the page while starting
+                _ => None,
+            }
+        };
+        if exited == Some(false) {
+            return err(StatusCode::BAD_GATEWAY, format!("It stopped before answering: {}", tail(&dir.join("engine.log"), 3)));
+        }
+        if t0.elapsed().as_secs() >= wait {
+            return err(StatusCode::GATEWAY_TIMEOUT, format!("Started, but {base}/v1/models did not answer within {wait} s. See {}/engine.log", dir.display()));
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
 }
 
@@ -338,10 +443,18 @@ async fn stop_child(mut c: tokio::process::Child) {
 
 async fn stop(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
     let child = app.children.lock().await.remove(&id);
-    match child {
-        Some(c) => { stop_child(c).await; Json(json!({"ok": true, "message": "Stopped."})).into_response() }
-        None => err(StatusCode::NOT_FOUND, "Not started by lemonade-engines."),
+    let had_child = child.is_some();
+    if let Some(c) = child { stop_child(c).await; }
+    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    if !e.stop_args.is_empty() {
+        let out = app.command(&e, app.exe_path(&e), &e.stop_args).output().await;
+        return match out {
+            Ok(o) if o.status.success() => Json(json!({"ok": true, "message": "Stopped."})).into_response(),
+            Ok(o) => err(StatusCode::BAD_GATEWAY, format!("stop failed: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))),
+            Err(x) => err(StatusCode::INTERNAL_SERVER_ERROR, x.to_string()),
+        };
     }
+    if had_child { Json(json!({"ok": true, "message": "Stopped."})).into_response() } else { err(StatusCode::NOT_FOUND, "Not started by lemonade-engines.") }
 }
 
 async fn shutdown_signal() {
@@ -353,6 +466,30 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let term = std::future::pending::<()>();
     tokio::select! { _ = ctrl_c => {}, _ = term => {} }
+}
+
+async fn plan(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    if e.plan_args.is_empty() { return Json(json!({"ok": true, "plan": null})).into_response(); }
+    if !app.installed(&e) { return err(StatusCode::CONFLICT, "Install it first."); }
+    let run = app.command(&e, app.exe_path(&e), &e.plan_args).output();
+    match tokio::time::timeout(Duration::from_secs(300), run).await {
+        Ok(Ok(o)) if o.status.success() => Json(json!({"ok": true, "plan": String::from_utf8_lossy(&o.stdout).trim()})).into_response(),
+        Ok(Ok(o)) => err(StatusCode::BAD_GATEWAY, format!("plan failed: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr))),
+        Ok(Err(x)) => err(StatusCode::INTERNAL_SERVER_ERROR, x.to_string()),
+        Err(_) => err(StatusCode::GATEWAY_TIMEOUT, "plan took longer than 300 s"),
+    }
+}
+
+/// Last lines of the engine's start log (or install log), so the page can show progress.
+async fn log_tail(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let dir = app.dir(&e.id);
+    let newest = ["engine.log", "install.log"].iter().map(|n| dir.join(n))
+        .filter_map(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (t, p)))
+        .max_by_key(|(t, _)| *t);
+    let line = newest.map(|(_, p)| tail(&p, 1)).unwrap_or_default();
+    Json(json!({"ok": true, "line": line})).into_response()
 }
 
 async fn register(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
@@ -451,6 +588,8 @@ async fn main() {
         .route("/api/engines/{id}/register", post(register))
         .route("/api/engines/{id}/unregister", post(unregister))
         .route("/api/engines/{id}/test", post(test))
+        .route("/api/engines/{id}/plan", post(plan))
+        .route("/api/engines/{id}/log", get(log_tail))
         .with_state(app.clone());
     let addr: SocketAddr = env("LE_LISTEN", "127.0.0.1:13500").parse().expect("LE_LISTEN");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -469,6 +608,44 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn platform_filter_picks_this_computer() {
+        let here = super::this_platform();
+        let e: super::Engine = toml::from_str(&format!(r#"
+            id = "x"
+            name = "x"
+            summary = "x"
+            licence = "x"
+            mode = "managed"
+            [[files]]
+            source = "https://a/common"
+            dest = "common"
+            [[files]]
+            source = "https://a/here"
+            dest = "here"
+            platform = "{here}"
+            [[files]]
+            source = "https://a/other"
+            dest = "other"
+            platform = "riscv64-plan9"
+        "#)).unwrap();
+        let names: Vec<_> = e.files_here().iter().map(|f| f.dest.as_str()).collect();
+        assert_eq!(names, ["common", "here"]);
+        assert!(e.available_here());
+        let only_other: super::Engine = toml::from_str(r#"
+            id = "y"
+            name = "y"
+            summary = "y"
+            licence = "y"
+            mode = "managed"
+            [[files]]
+            source = "https://a/other"
+            dest = "other"
+            platform = "riscv64-plan9"
+        "#).unwrap();
+        assert!(!only_other.available_here());
+    }
+
     use super::*;
 
     #[test]
@@ -486,6 +663,11 @@ mod tests {
             }
             assert!(e.id.chars().all(|c| c.is_ascii_alphanumeric()), "{}: provider names should be plain", e.id);
         }
+        let burn = c.engine.iter().find(|e| e.id == "burn").unwrap();
+        for p in ["x86_64-linux", "x86_64-windows", "x86_64-macos", "aarch64-macos"] {
+            assert!(burn.files.iter().any(|f| f.platform.as_deref() == Some(p)), "burn has no server for {p}");
+        }
+        assert!(burn.files.iter().all(|f| f.source.starts_with("https://") && f.sha256.as_ref().map_or(false, |h| h.len() == 64)), "burn files must be pinned downloads");
         let cake = c.engine.iter().find(|e| e.id == "cake").unwrap();
         assert!(cake.accept_licence, "Cake is non-commercial: it must ask first");
     }

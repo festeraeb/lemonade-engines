@@ -14,18 +14,34 @@
 [[engine]]
 id = "burn"
 name = "lemonade-burn"
-summary = "Microsoft BitNet b1.58 2B4T with a packed 2-bit ternary kernel. Runs on any recent x86-64 CPU; no GPU needed."
+summary = "Microsoft BitNet b1.58 2B4T with a packed 2-bit ternary kernel. Runs on the CPU; no GPU needed."
 licence = "MIT OR Apache-2.0 (BitNet weights: MIT)"
-hardware = "Linux x86-64 (glibc 2.30 or newer) with AVX2 (AVX-512 used when present), about 2 GB RAM; 0.9 GB download"
+hardware = "Linux x86-64 (glibc 2.30 or newer), Windows x86-64 or macOS (Intel or Apple silicon); about 2 GB RAM; 0.9 GB download. Fastest on x86-64 with AVX2 or AVX-512; Apple silicon uses the plain kernel."
 mode = "managed"
 port = 13431
 test_model = "bitnet-b1.58-2B-4T"
 args = ["--host", "127.0.0.1", "--port", "{port}", "--model", "{dir}/bitnet-b1.58-2B-4T-lbt", "--model-id", "bitnet-b1.58-2B-4T"]
 exe = "lemonade-burn-server"
 [[engine.files]]
-source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.0/lemonade-burn-server-0.1.0-x86_64-linux.tar.gz"
-dest = "lemonade-burn-server-0.1.0-x86_64-linux.tar.gz"
-sha256 = "043a83be7ba4a12f780bfa0f4d0cb2978bd2f218e7539ac1c1dbeb5dcf417c17"
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-linux.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-linux.tar.gz"
+sha256 = "3b97e6b573716bb312a2cb601fa6cb35543384f2c11c234c826dc9fda05b7145"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-windows.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-windows.tar.gz"
+sha256 = "d3ead93d40b42bc00096b71d54d9a24d3d169ffcc04a663cec286115696189ed"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-macos.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-macos.tar.gz"
+sha256 = "0a922b1d275ad0ef3cc8161e46fe7a04906061cc633660973665a154396495e5"
+platform = "x86_64-macos"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-aarch64-macos.tar.gz"
+dest = "lemonade-burn-server-0.1.1-aarch64-macos.tar.gz"
+sha256 = "12a9f6533eed4139f226ebe7578744a6bce28e7d52c4edcc25b819eb4ff607d7"
+platform = "aarch64-macos"
 [[engine.files]]
 source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.0/bitnet-b1.58-2B-4T-lbt.tar.gz"
 dest = "bitnet-b1.58-2B-4T-lbt.tar.gz"
@@ -38,19 +54,39 @@ summary = "A Lemonade 11.9 build with two extra backends, Cake and lemonade-burn
 licence = "Lemonade (Apache-2.0) with added backends (MIT OR Apache-2.0)"
 hardware = "Any GPU with Vulkan, or CPU"
 mode = "attach"
+note = "Not packaged yet: this needs the extended Lemonade server (Lemonade with the Cake and lemonade-burn backends) already running at 127.0.0.1:13410. A one-click build of that server is in progress."
 url = "http://127.0.0.1:13410"
 test_model = "Phi-3-mini-4k-instruct-Q4_K_M"
 
 [[engine]]
 id = "strata"
-name = "Strata (PolyStrata fork)"
-summary = "Runs a 125B mixture-of-experts model on one 12 GB gaming GPU by streaming experts. Fork adds Tesla P100 (Pascal, sm_60) support."
+name = "Strata"
+summary = "Runs large mixture-of-experts models on one gaming GPU by streaming experts. Installed with Strata's own signed installer; Strata picks the engine for your graphics card and a model for your RAM."
 licence = "MIT"
-hardware = "NVIDIA or AMD GPU with 12 GB or more, 32 GB RAM or more, ~70 GB disk for the model"
-mode = "attach"
-url = "http://127.0.0.1:8080"
-get_url = "https://github.com/festeraeb/Strata"
-note = "Strata installs itself: run its setup (Windows START-HERE.bat, Linux ./setup.sh). It picks a model for your RAM, downloads it and serves http://127.0.0.1:8080/v1. Then register it here."
+hardware = "Linux x86-64 with an NVIDIA or AMD GPU (12 GB or more), or a Mac with Apple silicon; 32 GB RAM or more; the model download is often 30 to 90 GB"
+mode = "managed"
+port = 13450
+exe = "data/terminal/current/bin/strata"
+args = ["launch", "--yes", "--no-tui", "--access", "local", "--port", "{port}", "--data-dir", "{dir}/models", "--save-preset", "lemonade-engines"]
+plan_args = ["launch", "--yes", "--no-tui", "--access", "local", "--port", "{port}", "--data-dir", "{dir}/models", "--save-preset", "lemonade-engines", "--plan"]
+stop_args = ["runtime", "stop", "--profile", "lemonade-engines"]
+start_wait_s = 172800
+note = "Before the first start the page shows what Strata will download (model, draft layer, picture reader and the engine for your card) and asks you to accept it. The download can take hours; progress is shown under the step. On Windows, use Strata's own installer for now."
+# Strata's own installer from its v0.2.3.1 release (sha256 from the release's SHA256SUMS.txt). It checks the
+# download's checksum and the release's signature and installs into this engine's folder.
+env = { STRATA_FEED = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1", STRATA_DATA_DIR = "{dir}/data", STRATA_BIN_DIR = "{dir}/bin" }
+[[engine.files]]
+source = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1/install.sh"
+dest = "install.sh"
+sha256 = "73a3e0cbd8f2f00e1f26a304c1f8f498afdf9be3a4a9f58c83fa5ffdb6642780"
+platform = "x86_64-linux"
+run = ["sh", "{dir}/install.sh"]
+[[engine.files]]
+source = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1/install.sh"
+dest = "install.sh"
+sha256 = "73a3e0cbd8f2f00e1f26a304c1f8f498afdf9be3a4a9f58c83fa5ffdb6642780"
+platform = "aarch64-macos"
+run = ["sh", "{dir}/install.sh"]
 
 [[engine]]
 id = "cake"
@@ -63,6 +99,6 @@ hardware = "Any; Vulkan or Metal GPU optional"
 mode = "attach"
 url = "http://127.0.0.1:13410"
 test_model = "Qwen2.5-Coder-1.5B-Cake"
-note = "Served through the extended Lemonade server's cake backend. Not redistributed: fetched after you accept its licence."
+note = "Not packaged yet: this needs the extended Lemonade server (Lemonade with the Cake and lemonade-burn backends) already running at 127.0.0.1:13410. A one-click build of that server is in progress. Served through the extended Lemonade server's cake backend. Not redistributed: fetched after you accept its licence."
 # Cake needs its port and launch command at load time, which a request routed through Lemonade cannot carry.
 preload = { model_name = "user.Qwen2.5-Coder-1.5B-Cake", cake_port = 18492, cake_args = "HF_HUB_OFFLINE=1 /home/cesarops/cake-test/bin/cake serve {model} --api 127.0.0.1:{port} --address 127.0.0.1:{worker_port} --dtype f16 --temperature 0" }

@@ -87,7 +87,7 @@ const results = {};
 let busy = {};
 
 const setups = {};  // id -> [{act, label, status: "wait"|"run"|"done"|"fail", msg}]
-const STEP_LABEL = {install: "Install the files", start: "Start the server", check: "Find the running server", register: "Add to Lemonade", test: "Ask a test question"};
+const STEP_LABEL = {install: "Install the files", plan: "Show what it will download", start: "Start the server", check: "Find the running server", register: "Add to Lemonade", test: "Ask a test question"};
 
 async function post(id, act, body) {
   const action = act === "check" ? "start" : act;
@@ -98,10 +98,11 @@ async function post(id, act, body) {
 }
 
 // One click: run only the steps this engine still needs, in order, stopping at the first failure.
-async function setup(id, accept) {
+async function setup(id, accept, acceptPlan) {
   const x = lastState.engines.find(v => v.engine.id === id); if (!x) return;
   const e = x.engine, steps = [];
   if (e.mode === "managed" && !x.installed) steps.push("install");
+  if (!x.up && e.plan_args && e.plan_args.length && !x.plan_accepted && !acceptPlan) steps.push("plan");
   if (!x.up) steps.push(e.mode === "attach" ? "check" : "start");
   if (!x.registered) steps.push("register");
   steps.push("test");
@@ -109,7 +110,19 @@ async function setup(id, accept) {
   busy[id] = "setup"; delete results[id]; render(lastState);
   for (const st of setups[id]) {
     st.status = "run"; render(lastState);
-    const j = await post(id, st.act, st.act === "install" && accept ? {accept_licence: true} : undefined);
+    const body = st.act === "install" && accept ? {accept_licence: true} : st.act === "start" && acceptPlan ? {accept_plan: true} : undefined;
+    // Long steps: show the newest log line every few seconds.
+    const poll = (st.act === "install" || st.act === "start") ? setInterval(async () => {
+      try { const l = await (await fetch(`/api/engines/${id}/log`)).json(); if (l.line && st.status === "run") { st.msg = l.line; render(lastState); } } catch (_) {}
+    }, 3000) : null;
+    const j = await post(id, st.act, body);
+    if (poll) clearInterval(poll);
+    if (st.act === "plan" && j.ok && j.plan) {
+      st.status = "done"; st.msg = "";
+      results[id] = {action: "plan", ok: true, plan: j.plan};
+      setups[id] = setups[id].filter(v => v.status !== "wait");
+      break;
+    }
     if (!j.ok) {
       st.status = "fail";
       st.msg = j.error || "failed";
@@ -145,6 +158,9 @@ async function call(id, action, body) {
 function resultBox(id) {
   const r = results[id]; if (!r) return "";
   if (!r.ok) return `<div class="out err">${esc(r.action)}: ${esc(r.error)}</div>`;
+  if (r.action === "plan") {
+    return `<div class="out">${esc(r.plan)}</div><div class="actions"><button class="primary big" data-act="setup" data-id="${id}" data-plan="1" ${busy[id] ? "disabled" : ""}>Download and start</button></div>`;
+  }
   if (r.action === "test") {
     const u = r.usage || {};
     const tok = u.completion_tokens ? `, ${u.completion_tokens} tokens, ${(u.completion_tokens / r.seconds).toFixed(1)} tok/s end to end` : "";
@@ -168,16 +184,18 @@ function render(s) {
       `<span class="chip ${x.up ? "on" : ""}">${x.up ? "server answering" : "server not running"}</span>`,
       `<span class="chip ${x.registered ? "on" : ""}">${x.registered ? `in Lemonade: ${x.models.length} model(s)` : "not in Lemonade"}</span>`,
       needAccept ? `<span class="chip warn">licence not accepted</span>` : "",
+      x.available === false ? `<span class="chip warn">no build for this computer (${esc(lastState.platform)}) yet</span>` : "",
     ].join("");
     const dis = c => (b || c) ? "disabled" : "";
     const ready = x.up && x.registered;
     const licence = needAccept ? `<div class="licence"><p><b>${esc(e.name)}</b> is under the ${esc(e.licence)}.${e.licence_url ? ` <a href="${esc(e.licence_url)}" target="_blank" rel="noopener">Read the licence</a>.` : ""} It is not bundled; accepting lets this computer fetch and run it.</p><div class="actions"><button class="primary big" data-act="setup" data-id="${id}" data-accept="1" ${dis()}>${b === "setup" ? "Setting up…" : "Accept and set up"}</button></div></div>` : "";
-    const main = needAccept ? "" : `<div class="actions">
+    const planWaiting = results[id] && results[id].action === "plan";
+    const main = (needAccept || x.available === false || planWaiting) ? "" : `<div class="actions">
       ${ready ? `<span class="ready">Ready in Lemonade</span>` : ""}
       <button class="primary big" data-act="${ready ? "test" : "setup"}" data-id="${id}" ${dis()}>${b === "setup" ? "Setting up…" : b === "test" ? "Asking…" : ready ? "Test a chat" : "Set up"}</button>
       ${e.get_url && !x.up ? `<a href="${esc(e.get_url)}" target="_blank" rel="noopener"><button tabindex="-1">Get it</button></a>` : ""}
     </div>`;
-    const steps = needAccept ? "" : `<details class="more"><summary>Individual steps</summary><div class="actions">
+    const steps = (needAccept || x.available === false) ? "" : `<details class="more"><summary>Individual steps</summary><div class="actions">
       ${e.mode === "managed" ? `<button data-act="install" data-id="${id}" ${dis(x.installed)}>${b === "install" ? "Installing…" : "Install"}</button>` : ""}
       <button data-act="start" data-id="${id}" ${dis(e.mode === "managed" && !x.installed)}>${b === "start" ? "Starting…" : (e.mode === "attach" ? "Check server" : (x.up ? "Running" : "Start"))}</button>
       <button data-act="register" data-id="${id}" ${dis(!x.up)}>${b === "register" ? "Registering…" : (x.registered ? "Register again" : "Add to Lemonade")}</button>
@@ -197,7 +215,7 @@ function render(s) {
 
 document.addEventListener("click", ev => {
   const btn = ev.target.closest("button[data-act]"); if (!btn || btn.disabled) return;
-  if (btn.dataset.act === "setup") setup(btn.dataset.id, !!btn.dataset.accept);
+  if (btn.dataset.act === "setup") setup(btn.dataset.id, !!btn.dataset.accept, !!btn.dataset.plan);
   else call(btn.dataset.id, btn.dataset.act, btn.dataset.accept ? {accept_licence: true} : undefined);
 });
 
