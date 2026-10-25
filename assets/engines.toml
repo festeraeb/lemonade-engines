@@ -102,3 +102,57 @@ test_model = "Qwen2.5-Coder-1.5B-Cake"
 note = "Not packaged yet: this needs the extended Lemonade server (Lemonade with the Cake and lemonade-burn backends) already running at 127.0.0.1:13410. A one-click build of that server is in progress. Served through the extended Lemonade server's cake backend. Not redistributed: fetched after you accept its licence."
 # Cake needs its port and launch command at load time, which a request routed through Lemonade cannot carry.
 preload = { model_name = "user.Qwen2.5-Coder-1.5B-Cake", cake_port = 18492, cake_args = "HF_HUB_OFFLINE=1 /home/cesarops/cake-test/bin/cake serve {model} --api 127.0.0.1:{port} --address 127.0.0.1:{worker_port} --dtype f16 --temperature 0" }
+
+[[engine]]
+id = "bonsai"
+name = "Ternary Bonsai 8B (GPU)"
+summary = "PrismML's ternary Qwen3-8B (2.18 GB) on PrismML's llama.cpp build, every layer on the GPU through Vulkan (AMD, NVIDIA or Intel). Measured 13 tok/s on a 2016 Radeon Pro WX 5100."
+licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+hardware = "Linux or Windows x86-64 with a Vulkan GPU and 3 GB of free video memory; 2.2 GB model download. On a machine with several GPUs set GGML_VK_VISIBLE_DEVICES to the one to use."
+mode = "managed"
+port = 13441
+test_model = "ternary-bonsai-8b"
+exe = "llama-prism-b10822-bf8c069/llama-server"
+exe_platform = { "x86_64-windows" = "llama-server.exe" }
+args = ["-m", "{dir}/Ternary-Bonsai-8B-PQ2_0.gguf", "--host", "127.0.0.1", "--port", "{port}", "-ngl", "99", "-c", "8192", "--alias", "ternary-bonsai-8b"]
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-ubuntu-vulkan-x64.tar.gz"
+dest = "llama-prism-b10822-bf8c069-bin-ubuntu-vulkan-x64.tar.gz"
+sha256 = "68d04743a53e35c7e22b8e05383d971ca0ea3bf944ea792ba47c17cc41b3c10f"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-win-vulkan-x64.zip"
+dest = "llama-prism-b10822-bf8c069-bin-win-vulkan-x64.zip"
+sha256 = "6fd7f45eafdb9dcc2ebf7e23df24d71fcd16c60fdc8c985682fbc48edd46a7ab"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/main/Ternary-Bonsai-8B-PQ2_0.gguf"
+dest = "Ternary-Bonsai-8B-PQ2_0.gguf"
+sha256 = "1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922"
+
+[[engine]]
+id = "bonsaicpu"
+name = "Ternary Bonsai 8B (CPU only)"
+summary = "The same ternary Qwen3-8B on the CPU, no GPU needed. Measured 4.8 tok/s on a 4-core 2013 Xeon E3."
+licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+hardware = "Linux or Windows x86-64, about 3 GB RAM; 2.2 GB model download."
+mode = "managed"
+port = 13442
+test_model = "ternary-bonsai-8b"
+exe = "llama-prism-b10822-bf8c069/llama-server"
+exe_platform = { "x86_64-windows" = "llama-server.exe" }
+args = ["-m", "{dir}/Ternary-Bonsai-8B-PQ2_0.gguf", "--host", "127.0.0.1", "--port", "{port}", "-dev", "none", "-ngl", "0", "-c", "8192", "--alias", "ternary-bonsai-8b"]
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-ubuntu-x64.tar.gz"
+dest = "llama-prism-b10822-bf8c069-bin-ubuntu-x64.tar.gz"
+sha256 = "c1bcad295ca60f4a02d28129f00f6738a6803b0d5ea4443295a9f5a579de7629"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-win-cpu-x64.zip"
+dest = "llama-prism-b10822-bf8c069-bin-win-cpu-x64.zip"
+sha256 = "bb54656f9c83fd64000790bce48b3dfa031af95090c61b666e28c699105a4354"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/main/Ternary-Bonsai-8B-PQ2_0.gguf"
+dest = "Ternary-Bonsai-8B-PQ2_0.gguf"
+sha256 = "1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922"
