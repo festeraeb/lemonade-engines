@@ -36,6 +36,7 @@ builds them from each tag. Unpack and run `lemonade-engines`. The page then open
 |---|---|---|
 | lemonade-burn | Downloads the server for this computer and the BitNet model (sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows, macOS |
 | Strata | Runs Strata's own signed installer into the engine folder, shows the plan (model and download size) and waits for **Download and start**, then serves through `strata launch` | Linux x86-64, Apple silicon Mac |
+| Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux; Windows once .zip unpacking lands |
 | Extended Lemonade server, Cake | Attach to a server you already run at 127.0.0.1:13410; not packaged yet | |
 
 ## Status
@@ -43,6 +44,7 @@ builds them from each tag. Unpack and run `lemonade-engines`. The page then open
 Tested on 2026-10-24 with Lemonade 2026.41.1 on Linux x86-64, through the page in a browser:
 
 - lemonade-burn: installed from the release, started, added to Lemonade and answered a chat.
+- Ternary Bonsai 8B (CPU only), 2026-10-25 on t440: installed (2.2 GB), started, registered as `bonsai-cpu.ternary-bonsai-8b` (catalogue id since renamed `bonsaicpu`: provider ids are letters and digits only) and answered through Lemonade in 2.0 s. The GPU entry's build was run by hand on a Radeon Pro WX 5100 (13 tok/s) but not yet through this page.
   Downloads stream to disk and are checked against the catalogue's sha256; a wrong checksum is
   rejected and leaves nothing behind.
 - Strata: installed with its signed installer and showed its plan (an 84 GB model on the test
