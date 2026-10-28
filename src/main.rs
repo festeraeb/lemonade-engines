@@ -300,9 +300,11 @@ fn unpack_zip(archive: &Path, dir: &Path) -> Result<(), String> {
         {
             use std::os::unix::fs::PermissionsExt;
             if let Some(mode) = entry.unix_mode() {
-                if mode & 0o111 != 0 {
+                let exec = mode & 0o111;
+                if exec != 0 {
                     let mut perms = out_file.metadata().map_err(|e| e.to_string())?.permissions();
-                    perms.set_mode(perms.mode() | 0o111);
+                    // Keep the entry's execute bits, without the file-type bits of the current mode.
+                    perms.set_mode((perms.mode() & 0o7777 & !0o111) | exec);
                     std::fs::set_permissions(&out, perms).map_err(|e| format!("setting permissions on {}: {e}", out.display()))?;
                 }
             }
@@ -675,6 +677,9 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::io::Write;
+
     #[test]
     fn platform_filter_picks_this_computer() {
         let here = super::this_platform();
@@ -712,9 +717,6 @@ mod tests {
         "#).unwrap();
         assert!(!only_other.available_here());
     }
-
-    use super::*;
-    use std::io::Write;
 
     #[test]
     fn builtin_catalog_parses_and_is_consistent() {
