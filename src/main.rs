@@ -295,7 +295,10 @@ fn unpack_zip(archive: &Path, dir: &Path) -> Result<(), String> {
             std::fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
         let mut out_file = std::fs::File::create(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
-        std::io::copy(&mut entry, &mut out_file).map_err(|e| format!("writing {}: {e}", out.display()))?;
+        let written = std::io::copy(&mut entry, &mut out_file).map_err(|e| format!("writing {}: {e}", out.display()))?;
+        if written != entry.size() {
+            return Err(format!("{}: wrote {written} bytes, expected {}", out.display(), entry.size()));
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -374,10 +377,12 @@ async fn fetch(app: &App, e: &Engine, f: &FileSpec, dir: &Path) -> Result<(), St
     if f.dest.ends_with(".zip") {
         let archive = dst.clone();
         let target = dir.to_path_buf();
-        tokio::task::spawn_blocking(move || unpack(&archive, &target))
-            .await
-            .map_err(|e| format!("unpacking {} failed: {e}", f.dest))?
-            .map_err(|e| format!("unpacking {} failed: {e}", f.dest))?;
+        let result = tokio::task::spawn_blocking(move || unpack(&archive, &target)).await.unwrap_or_else(|e| Err(e.to_string()));
+        if let Err(m) = result {
+            // Remove the archive so the next Install unpacks it again instead of skipping it.
+            let _ = tokio::fs::remove_file(&dst).await;
+            return Err(format!("unpacking {} failed: {m}", f.dest));
+        }
         // Keep an empty marker under the archive's name (install skips files that exist) instead of a second copy on disk.
         tokio::fs::write(&dst, b"").await.map_err(|e| e.to_string())?;
     }
