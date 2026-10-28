@@ -240,8 +240,11 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
             Some(b) => app.http.get(format!("{b}/v1/models")).timeout(Duration::from_secs(2)).send().await.map(|r| r.status().is_success()).unwrap_or(false),
             None => false,
         };
-        let registered = providers.iter().any(|p| p["name"].as_str() == Some(&e.id));
-        let models = if registered { app.lemonade_models(&e.id).await } else { vec![] };
+        let listed = providers.iter().any(|p| p["name"].as_str() == Some(&e.id));
+        let models = if listed { app.lemonade_models(&e.id).await } else { vec![] };
+        // Lemonade keeps the provider across restarts but forgets its runtime key, and then lists no models.
+        // Count that as not registered, so Set up runs "Add to Lemonade" (which sets the key) again.
+        let registered = listed && !models.is_empty();
         let running_here = app.children.lock().await.contains_key(&e.id);
         engines.push(json!({
             "engine": e, "installed": app.installed(e), "up": up, "running_here": running_here,
