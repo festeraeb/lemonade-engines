@@ -36,24 +36,50 @@ builds them from each tag. Unpack and run `lemonade-engines`. The page then open
 |---|---|---|
 | lemonade-burn | Downloads the server for this computer and the BitNet model (sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows, macOS |
 | Strata | Runs Strata's own signed installer into the engine folder, shows the plan (model and download size) and waits for **Download and start**, then serves through `strata launch` | Linux x86-64, Apple silicon Mac |
-| Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows |
-| Extended Lemonade server, Cake | Attach to a server you already run at 127.0.0.1:13410; not packaged yet | |
+| Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer (.tar.gz or .zip) and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows |
+| Iced lemon cake | Downloads a Lemonade 2026.43.3 server with the Cake and lemonade-burn backends (see `packaging/iced-lemcake`), starts it on 127.0.0.1:13410, loads a small test model, adds it to Lemonade, asks a test question | Linux x86-64, Windows x86-64 |
+| Cake | Attaches to the Iced lemon cake server, registers a Cake model and adds it to Lemonade. Cake's program is not bundled (FAIR licence): put it at `bin/cake` in the engine folder, on PATH, or set `LE_CAKE_BIN` | Where Cake builds |
 
-Windows builds of the Bonsai engine come as `.zip` files; the installer unpacks them into the engine folder.
+## Tests
+
+`tests/e2e/setup.mjs` drives the page in a real browser (Playwright): it presses Set up for one engine,
+waits for each step, prints the test chat the page shows, then presses Stop.
+
+```sh
+cd tests/e2e && npm install
+node setup.mjs --url http://127.0.0.1:13500 --engine burn --channel chrome   # or --channel msedge, or --exe /usr/bin/google-chrome
+```
+
+Add `--accept` for Cake, `--plan` to accept Strata's download plan, `--shots DIR` for screenshots.
+`cargo test` runs the unit tests.
 
 ## Status
 
-Tested on 2026-10-24 with Lemonade 2026.41.1 on Linux x86-64, through the page in a browser:
+Tested on 2026-10-28 with the stock Lemonade 2026.43.3 (lemond), through the page, driven by `tests/e2e/setup.mjs`.
+Each run: install, start, add to Lemonade, test chat through Lemonade, Stop. Fresh engine folder and a fresh Lemonade each time.
+Machines: Windows 11 (build 26200) i7-7820HQ, Quadro M2200 4 GB, Edge; Linux t440 (Ubuntu 24.04, Tesla P100s); Linux cesarops4om (Arch, GTX 1070). Speeds are end to end as the page prints them, on shared machines.
 
-- lemonade-burn: installed from the release, started, added to Lemonade and answered a chat.
-- Ternary Bonsai 8B (CPU only), 2026-10-25 on t440: installed (2.2 GB), started, registered as `bonsai-cpu.ternary-bonsai-8b` (catalogue id since renamed `bonsaicpu`: provider ids are letters and digits only) and answered through Lemonade in 2.0 s. The GPU entry's build was run by hand on a Radeon Pro WX 5100 (13 tok/s) but not yet through this page.
-  Downloads stream to disk and are checked against the catalogue's sha256; a wrong checksum is
-  rejected and leaves nothing behind.
-- Strata: installed with its signed installer and showed its plan (an 84 GB model on the test
-  machine). Downloading the model and serving were not run in this test, so Start and Stop for
-  Strata are untested.
-- The Windows and macOS builds of both programs compile and package in CI; they have not been run
-  on those systems yet.
+| Engine | Linux | Windows |
+|---|---|---|
+| lemonade-burn | pass, t440 and c4 (22 tokens, 2.2 to 2.8 s) | pass (22 tokens, 2.0 s idle) |
+| Ternary Bonsai 8B (CPU) | pass, t440 and c4 (18 tokens, 1.7 to 12 s depending on load) | pass (18 tokens, 6.6 s idle) |
+| Ternary Bonsai 8B (GPU) | pass, t440 (Tesla P100, Vulkan) and c4 (GTX 1070, Vulkan) | pass on the Quadro M2200 through Vulkan (18 tokens, 2.2 s; llama.cpp logged 13.4 tok/s generation) |
+| Iced lemon cake | pass, t440 and c4 (LFM2-1.2B, 24 to 29 tokens) | pass (LFM2-1.2B, 24 tokens, 0.7 s) |
+| Cake | pass, c4 (Cake 0.1.0 built locally; 23 tokens, 10.2 s, 2.3 tok/s) | not run: no Windows Cake program (see below) |
+| Strata | installer and plan pass on t440 (84 GB model, 89.7 GB download); Download, Start and Stop not run | not offered by the catalogue; this machine's GPU is 4 GB, Strata needs 12 GB |
+
+Not run, and why:
+- Strata Download, Start, Stop: needs 12 GB or more of free video memory and a 90 GB download; every GPU in the fleet that was checked is held by a running seat.
+- Cake on Windows: Cake publishes no binaries, and building it from source on the test machine was not completed.
+- Cake on cesarops3: the node became unreachable during the Cake load; the pass above is from cesarops4om.
+- macOS: no machine.
+
+Found and fixed while testing:
+- A provider that Lemonade keeps across a restart (its runtime key is lost, so it lists no models) counted as registered; Set up skipped Add to Lemonade.
+- Cake's licence acceptance was never recorded, because attach engines skipped the install step.
+- Windows Stop left the engine's child processes (llama-server) running.
+- Cake's launch line pointed at `/home/cesarops/cake-test/bin/cake`.
+- Cake and lemonade-burn backends did not compile against Lemonade 2026.43.3, and `cake_port` as a JSON number failed to load.
 
 ## Licence
 
