@@ -276,6 +276,63 @@ async fn copy_path(src: &Path, dst: &Path) -> Result<(), String> {
     }
 }
 
+/// Extract a .zip archive into `dir`. Entries whose path would escape `dir` are refused.
+fn unpack_zip(archive: &Path, dir: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| format!("opening {}: {e}", archive.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("reading {}: {e}", archive.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).map_err(|e| format!("reading entry {i} of {}: {e}", archive.display()))?;
+        let Some(rel) = entry.enclosed_name() else {
+            return Err(format!("{}: entry {i} has a path outside the archive root", archive.display()));
+        };
+        let out = dir.join(&rel);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
+        }
+        let mut out_file = std::fs::File::create(&out).map_err(|e| format!("creating {}: {e}", out.display()))?;
+        std::io::copy(&mut entry, &mut out_file).map_err(|e| format!("writing {}: {e}", out.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = entry.unix_mode() {
+                if mode & 0o111 != 0 {
+                    let mut perms = out_file.metadata().map_err(|e| e.to_string())?.permissions();
+                    perms.set_mode(perms.mode() | 0o111);
+                    std::fs::set_permissions(&out, perms).map_err(|e| format!("setting permissions on {}: {e}", out.display()))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Unpack a downloaded archive into `dir`: .tar.gz through tar, .zip through unpack_zip.
+fn unpack(archive: &Path, dir: &Path) -> Result<(), String> {
+    let name = archive.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+    if name.ends_with(".tar.gz") {
+        let st = std::process::Command::new("tar")
+            .arg("xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(dir)
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !st.success() {
+            return Err(format!("unpacking {name} failed"));
+        }
+        Ok(())
+    } else if name.ends_with(".zip") {
+        unpack_zip(archive, dir)
+    } else {
+        Err(format!("unsupported archive {name}"))
+    }
+}
+
 async fn fetch(app: &App, e: &Engine, f: &FileSpec, dir: &Path) -> Result<(), String> {
     let dst = dir.join(&f.dest);
     if let Some(p) = dst.parent() { tokio::fs::create_dir_all(p).await.map_err(|e| e.to_string())?; }
@@ -309,6 +366,16 @@ async fn fetch(app: &App, e: &Engine, f: &FileSpec, dir: &Path) -> Result<(), St
     if f.dest.ends_with(".tar.gz") {
         let st = Command::new("tar").arg("xzf").arg(&dst).arg("-C").arg(dir).status().await.map_err(|e| e.to_string())?;
         if !st.success() { return Err(format!("unpacking {} failed", f.dest)); }
+        // Keep an empty marker under the archive's name (install skips files that exist) instead of a second copy on disk.
+        tokio::fs::write(&dst, b"").await.map_err(|e| e.to_string())?;
+    }
+    if f.dest.ends_with(".zip") {
+        let archive = dst.clone();
+        let target = dir.to_path_buf();
+        tokio::task::spawn_blocking(move || unpack(&archive, &target))
+            .await
+            .map_err(|e| format!("unpacking {} failed: {e}", f.dest))?
+            .map_err(|e| format!("unpacking {} failed: {e}", f.dest))?;
         // Keep an empty marker under the archive's name (install skips files that exist) instead of a second copy on disk.
         tokio::fs::write(&dst, b"").await.map_err(|e| e.to_string())?;
     }
@@ -647,6 +714,7 @@ mod tests {
     }
 
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn builtin_catalog_parses_and_is_consistent() {
@@ -670,5 +738,96 @@ mod tests {
         assert!(burn.files.iter().all(|f| f.source.starts_with("https://") && f.sha256.as_ref().map_or(false, |h| h.len() == 64)), "burn files must be pinned downloads");
         let cake = c.engine.iter().find(|e| e.id == "cake").unwrap();
         assert!(cake.accept_licence, "Cake is non-commercial: it must ask first");
+    }
+
+    /// A directory under the system temp dir, removed when the test ends.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("lemonade-engines-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("could not create the temporary directory");
+            TempDir(path)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn zip_unpacks_files_and_dirs() {
+        let tmp = TempDir::new("zip-files");
+        let archive = tmp.path().join("build.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        writer.start_file("llama-server.exe", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"exe").unwrap();
+        writer.add_directory("sub", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.start_file("sub/llama.dll", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"dll").unwrap();
+        writer.finish().unwrap();
+
+        let out = tmp.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        unpack(&archive, &out).unwrap();
+
+        assert_eq!(std::fs::read(out.join("llama-server.exe")).unwrap(), b"exe");
+        assert_eq!(std::fs::read(out.join("sub/llama.dll")).unwrap(), b"dll");
+        assert!(out.join("sub").is_dir());
+    }
+
+    #[test]
+    fn zip_rejects_path_escape() {
+        let tmp = TempDir::new("zip-escape");
+        let archive = tmp.path().join("evil.zip");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        writer.start_file("../evil", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"nope").unwrap();
+        writer.finish().unwrap();
+
+        let out = tmp.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let result = unpack(&archive, &out);
+        assert!(result.is_err(), "an entry that escapes the target directory must be refused");
+        assert!(!tmp.path().join("evil").exists(), "nothing may be written outside the target directory");
+    }
+
+    #[test]
+    fn zip_real_prism_build() {
+        let Ok(path) = std::env::var("LE_TEST_ZIP") else { return };
+        let path = PathBuf::from(path);
+        if !path.exists() { return; }
+        let tmp = TempDir::new("zip-prism");
+        let out = tmp.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        unpack(&path, &out).unwrap();
+        assert!(out.join("llama-server.exe").exists(), "llama-server.exe is missing from {}", path.display());
+        assert!(out.join("llama.dll").exists(), "llama.dll is missing from {}", path.display());
+    }
+
+    #[test]
+    fn tar_gz_still_unpacks() {
+        let tmp = TempDir::new("tar-gz");
+        std::fs::write(tmp.path().join("hello.txt"), b"hello").unwrap();
+        let archive = tmp.path().join("hello.tar.gz");
+        let st = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("hello.txt")
+            .current_dir(tmp.path())
+            .status()
+            .unwrap();
+        assert!(st.success(), "tar could not create the test archive");
+
+        let out = tmp.path().join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        unpack(&archive, &out).unwrap();
+        assert_eq!(std::fs::read(out.join("hello.txt")).unwrap(), b"hello");
     }
 }
