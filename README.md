@@ -36,8 +36,10 @@ builds them from each tag. Unpack and run `lemonade-engines`. The page then open
 |---|---|---|
 | lemonade-burn | Downloads the server for this computer and the BitNet model (sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows, macOS |
 | Strata | Runs Strata's own signed installer into the engine folder, shows the plan (model and download size) and waits for **Download and start**, then serves through `strata launch` | Linux x86-64, Apple silicon Mac |
-| Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux; Windows once .zip unpacking lands |
+| Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows |
 | Extended Lemonade server, Cake | Attach to a server you already run at 127.0.0.1:13410; not packaged yet | |
+
+Windows builds of the Bonsai engine come as `.zip` files; the installer unpacks them into the engine folder.
 
 ## Status
 

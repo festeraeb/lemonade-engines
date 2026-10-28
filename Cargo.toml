@@ -14,3 +14,4 @@ toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
 rand = "0.8"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
