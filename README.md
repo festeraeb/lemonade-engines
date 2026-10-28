@@ -69,7 +69,7 @@ Machines: Windows 11 (build 26200) i7-7820HQ, Quadro M2200 4 GB, Edge; Linux t44
 | Strata | installer and plan pass on t440 (84 GB model, 89.7 GB download); Download, Start and Stop not run | not offered by the catalogue; this machine's GPU is 4 GB, Strata needs 12 GB |
 
 Not run, and why:
-- Strata Download, Start, Stop: needs 12 GB or more of free video memory and a 90 GB download; every GPU in the fleet that was checked is held by a running seat.
+- Strata Download, Start, Stop: needs 12 GB or more of free video memory and a 90 GB download; no GPU on the checked nodes (t440, c2, c3, c4) had 12 GB free without displacing a running seat.
 - Cake on Windows: Cake publishes no binaries, and building it from source on the test machine was not completed.
 - Cake on cesarops3: the node became unreachable during the Cake load; the pass above is from cesarops4om.
 - macOS: no machine.
