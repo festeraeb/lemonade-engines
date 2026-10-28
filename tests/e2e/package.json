@@ -1,0 +1,6 @@
+{
+  "name": "lemonade-engines-e2e",
+  "private": true,
+  "description": "Drives the lemonade-engines page: clicks Set up and reads each step and the test chat.",
+  "dependencies": { "playwright-core": "1.55.1" }
+}
