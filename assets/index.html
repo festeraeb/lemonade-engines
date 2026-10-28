@@ -101,7 +101,8 @@ async function post(id, act, body) {
 async function setup(id, accept, acceptPlan) {
   const x = lastState.engines.find(v => v.engine.id === id); if (!x) return;
   const e = x.engine, steps = [];
-  if (e.mode === "managed" && !x.installed) steps.push("install");
+  // Attach engines have nothing to install, but a licence-gated one records the acceptance in this step.
+  if ((e.mode === "managed" && !x.installed) || (e.accept_licence && !x.accepted)) steps.push("install");
   if (!x.up && e.plan_args && e.plan_args.length && !x.plan_accepted && !acceptPlan) steps.push("plan");
   if (!x.up) steps.push(e.mode === "attach" ? "check" : "start");
   if (!x.registered) steps.push("register");
