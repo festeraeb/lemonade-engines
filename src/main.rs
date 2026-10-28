@@ -564,6 +564,12 @@ async fn stop_child(mut c: tokio::process::Child) {
         }
         let _ = Command::new("kill").args(["-KILL", "--", &group]).stderr(Stdio::null()).status().await;
     }
+    // Windows has no process groups here: kill the whole tree, or a server's own children (e.g. the llama-server
+    // behind a Lemonade) keep running after Stop.
+    #[cfg(windows)]
+    if let Some(pid) = c.id() {
+        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status().await;
+    }
     let _ = c.kill().await;
     let _ = c.wait().await;
 }
