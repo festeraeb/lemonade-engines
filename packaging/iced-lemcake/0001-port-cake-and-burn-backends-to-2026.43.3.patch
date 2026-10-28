@@ -1,0 +1,277 @@
+--- a/src/cpp/include/lemon/backends/burn/burn.h
++++ b/src/cpp/include/lemon/backends/burn/burn.h
+@@ -25,12 +25,11 @@
+          "Private lemonade-burn-server port behind the Rust bridge (default 18090)", "lemonade-burn Options"},
+     },
+     /*support*/ {
+-        {"system", {"linux"}, {{"cpu", {"x86_64"}}}, "x86_64 CPU (AVX2 / AVX-512 ternary kernels)"},
++        {"cpu", BackendTier::Experimental, BackendFormat::Native, {"linux", "windows", "macos"}, {{"cpu", {"x86_64", "arm64"}}}, "x86_64 CPU (AVX2 / AVX-512 ternary kernels), Apple silicon plain kernel"},
+     },
+     /*supported_modes*/ {"chat"},
+     /*required_checkpoints*/ {"main"},
+     /*default_capabilities*/ {},
+-    /*experimental*/        true,
+     /*web_display_name*/    "",
+     /*rocm_channels*/       {},
+     /*exposes_prometheus_metrics*/ false,
+--- a/src/cpp/include/lemon/backends/cake/cake_server.h
++++ b/src/cpp/include/lemon/backends/cake/cake_server.h
+@@ -1,12 +1,15 @@
+ #pragma once
+ 
+ #include "lemon/backends/backend_registry.h"
++#include "lemon/backends/backend_utils.h"
+ #include "lemon/wrapped_server.h"
+ 
+ namespace lemon { namespace backends {
+ 
+ class CakeServer : public WrappedServer, public ICompletionServer {
+ public:
++    static InstallParams get_install_params(const std::string& backend, const std::string& version);
++
+     CakeServer(const std::string& log_level,
+                ModelManager* model_manager,
+                BackendManager* backend_manager);
+--- a/src/cpp/server/backends/burn/burn_server.cpp
++++ b/src/cpp/server/backends/burn/burn_server.cpp
+@@ -8,7 +8,11 @@
+ #include "lemon/utils/http_client.h"
+ #include "lemon/utils/process_manager.h"
+ 
++#include <cstdlib>
+ #include <filesystem>
++#ifdef _WIN32
++#include <windows.h>
++#endif
+ #include <stdexcept>
+ #include <string>
+ #include <vector>
+@@ -17,9 +21,37 @@
+ 
+ namespace {
+ constexpr const char* kRuntimeName = "lemonade-burn";
+-// `exec` so the bridge's kill reaches the server itself, not a wrapper shell.
+-constexpr const char* kDefaultCommand =
+-    "exec lemonade-burn-server --model {model} --port {port}";
++// `exec` so the bridge's kill reaches the server itself, not a wrapper shell (cmd on Windows has no exec).
++#ifdef _WIN32
++constexpr const char* kDefaultCommand = "lemonade-burn-server --model {model} --port {port}";
++#else
++constexpr const char* kDefaultCommand = "exec lemonade-burn-server --model {model} --port {port}";
++#endif
++
++std::string find_bridge_binary() {
++    namespace fs = std::filesystem;
++#ifdef _WIN32
++    const char* exe_name = "lemonade-cake-bridge.exe";
++#else
++    const char* exe_name = "lemonade-cake-bridge";
++#endif
++    if (const char* env = std::getenv("LEMONADE_CAKE_BRIDGE")) {
++        if (*env && fs::exists(env)) return env;
++    }
++    std::error_code ec;
++#ifdef _WIN32
++    wchar_t buf[MAX_PATH];
++    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
++    fs::path self = n ? fs::path(std::wstring(buf, n)) : fs::path();
++#else
++    fs::path self = fs::read_symlink("/proc/self/exe", ec);
++#endif
++    if (!self.empty()) {
++        fs::path next = self.parent_path() / exe_name;
++        if (fs::exists(next, ec)) return next.string();
++    }
++    return exe_name;
++}
+ }  // namespace
+ 
+ InstallParams BurnServer::get_install_params(const std::string& /*backend*/,
+@@ -45,9 +77,11 @@
+         throw std::runtime_error("lemonade-burn model checkpoint is empty for: " + model_name);
+     }
+ 
+-    std::string configured_port = options.get_option("burn_port");
+-    if (!configured_port.empty()) {
+-        private_port_ = std::stoi(configured_port);
++    const json configured_port = options.get_option("burn_port");
++    if (configured_port.is_number_integer()) {
++        private_port_ = configured_port.get<int>();
++    } else if (configured_port.is_string() && !configured_port.get<std::string>().empty()) {
++        private_port_ = std::stoi(configured_port.get<std::string>());
+     }
+ 
+     port_ = choose_port();
+@@ -55,8 +89,7 @@
+         throw std::runtime_error("Failed to allocate Lemonade private port for lemonade-burn bridge");
+     }
+ 
+-    std::string bridge_executable =
+-        BackendUtils::get_backend_binary_path(*burn::spec(), "system");
++    std::string bridge_executable = find_bridge_binary();
+ 
+     std::string command = options.get_option("burn_args");
+     if (command.empty()) {
+@@ -76,33 +109,25 @@
+                       << checkpoint << std::endl;
+ 
+     const bool inherit_output = (log_level_ == "info") || is_debug();
+-    set_process_handle(utils::ProcessManager::start_process(
+-                           bridge_executable, args, "", inherit_output, true, {}),
+-                       bridge_executable, args);
+-
+-    if (!wait_for_ready("/health")) {
+-        unload();
+-        throw std::runtime_error("lemonade-burn bridge failed to become ready");
+-    }
++    ServerCommand server_command;
++    server_command.program = bridge_executable;
++    server_command.args = std::move(args);
++    server_command.port = port_;
++    start_server(std::make_unique<NativeProcess>(ProcessOutput{inherit_output, false}), server_command);
+ 
+     const json fingerprint = forward_get_request("/internal/runtime-fingerprint", 5);
+     if (!fingerprint.value("runtime_identity_verified", false) ||
+         fingerprint.value("observed_runtime", std::string{}) != kRuntimeName) {
+-        unload();
++        stop_server();
+         throw std::runtime_error(
+             "lemonade-burn runtime identity verification failed; refusing mislabeled backend");
+     }
+ 
+-    start_backend_watchdog("/health");
+     LOG(INFO, "Burn") << "lemonade-burn backend ready on bridge port " << port_ << std::endl;
+ }
+ 
+ void BurnServer::unload() {
+-    stop_backend_watchdog();
+-    const ProcessHandle handle = consume_process_handle_for_cleanup();
+-    if (has_process_handle(handle)) {
+-        utils::ProcessManager::stop_process(handle);
+-    }
++    stop_server();
+ }
+ 
+ json BurnServer::chat_completion(const json& request) {
+--- a/src/cpp/server/backends/cake/cake_server.cpp
++++ b/src/cpp/server/backends/cake/cake_server.cpp
+@@ -12,8 +12,46 @@
+ #include <string>
+ #include <vector>
+ 
++#ifdef _WIN32
++#include <windows.h>
++#endif
++#include <cstdlib>
++#include <filesystem>
++
+ namespace lemon { namespace backends {
+ 
++namespace {
++// The Rust bridge ships next to lemond. LEMONADE_CAKE_BRIDGE overrides; PATH is the last resort.
++std::string find_bridge_binary() {
++    namespace fs = std::filesystem;
++#ifdef _WIN32
++    const char* exe_name = "lemonade-cake-bridge.exe";
++#else
++    const char* exe_name = "lemonade-cake-bridge";
++#endif
++    if (const char* env = std::getenv("LEMONADE_CAKE_BRIDGE")) {
++        if (*env && fs::exists(env)) return env;
++    }
++    std::error_code ec;
++#ifdef _WIN32
++    wchar_t buf[MAX_PATH];
++    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
++    fs::path self = n ? fs::path(std::wstring(buf, n)) : fs::path();
++#else
++    fs::path self = fs::read_symlink("/proc/self/exe", ec);
++#endif
++    if (!self.empty()) {
++        fs::path next = self.parent_path() / exe_name;
++        if (fs::exists(next, ec)) return next.string();
++    }
++    return exe_name;  // resolved through PATH by the process launcher
++}
++}  // namespace
++
++InstallParams CakeServer::get_install_params(const std::string&, const std::string&) {
++    return {};  // the bridge ships with lemond; nothing to download
++}
++
+ CakeServer::CakeServer(const std::string& log_level,
+                        ModelManager* model_manager,
+                        BackendManager* backend_manager)
+@@ -32,9 +70,12 @@
+         throw std::runtime_error("Cake model checkpoint is empty for: " + model_name);
+     }
+ 
+-    std::string configured_port = options.get_option("cake_port");
+-    if (!configured_port.empty()) {
+-        cake_private_port_ = std::stoi(configured_port);
++    // The option arrives as a number from a JSON load request and as a string from the CLI or config: accept both.
++    const json configured_port = options.get_option("cake_port");
++    if (configured_port.is_number_integer()) {
++        cake_private_port_ = configured_port.get<int>();
++    } else if (configured_port.is_string() && !configured_port.get<std::string>().empty()) {
++        cake_private_port_ = std::stoi(configured_port.get<std::string>());
+     }
+ 
+     port_ = choose_port();
+@@ -42,8 +83,7 @@
+         throw std::runtime_error("Failed to allocate Lemonade private port for Cake bridge");
+     }
+ 
+-    std::string bridge_executable =
+-        BackendUtils::get_backend_binary_path(*cake::spec(), "");
++    std::string bridge_executable = find_bridge_binary();
+ 
+     std::vector<std::string> args = {
+         "--listen-port", std::to_string(port_),
+@@ -62,39 +102,25 @@
+                        << port_ << " for model " << checkpoint << std::endl;
+ 
+     const bool inherit_output = (log_level_ == "info") || is_debug();
+-    set_process_handle(utils::ProcessManager::start_process(
+-        bridge_executable,
+-        args,
+-        "",
+-        inherit_output,
+-        true,
+-        {}
+-    ));
+-
+-    if (!wait_for_ready("/health")) {
+-        unload();
+-        throw std::runtime_error("lemonade-cake-bridge failed to become ready");
+-    }
++    ServerCommand command;
++    command.program = bridge_executable;
++    command.args = std::move(args);
++    command.port = port_;
++    start_server(std::make_unique<NativeProcess>(ProcessOutput{inherit_output, false}), command);
+ 
+     const json fingerprint = forward_get_request("/internal/runtime-fingerprint", 5);
+     if (!fingerprint.value("runtime_identity_verified", false) ||
+         fingerprint.value("observed_runtime", std::string{}) != "cake") {
+-        unload();
++        stop_server();
+         throw std::runtime_error(
+             "Cake runtime identity verification failed; refusing mislabeled backend");
+     }
+ 
+-    start_backend_watchdog("/health");
+     LOG(INFO, "Cake") << "Cake backend ready on bridge port " << port_ << std::endl;
+ }
+ 
+ void CakeServer::unload() {
+-    stop_backend_watchdog();
+-
+-    const ProcessHandle handle = consume_process_handle_for_cleanup();
+-    if (has_process_handle(handle)) {
+-        utils::ProcessManager::stop_process(handle);
+-    }
++    stop_server();
+ }
+ 
+ json CakeServer::chat_completion(const json& request) {
