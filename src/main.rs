@@ -63,6 +63,12 @@ struct Engine {
     files: Vec<FileSpec>,
     #[serde(default)]
     preload: Option<Value>,
+    /// Keys of `preload` replaced on a given platform (e.g. a Windows command line), keyed like `exe_platform`.
+    #[serde(default)]
+    preload_platform: std::collections::BTreeMap<String, Value>,
+    /// Posted to the engine's /api/v1/pull before `preload`, to register a model it does not list yet.
+    #[serde(default)]
+    pull: Option<Value>,
     #[serde(default)]
     get_url: Option<String>,
     #[serde(default)]
@@ -156,6 +162,50 @@ impl App {
         if cfg!(windows) && exe.extension().is_none() { exe.set_extension("exe"); }
         exe
     }
+    /// Where this engine's program is: `LE_<ID>_BIN` if set, else `exe` inside the engine folder, else a program
+    /// of that name on PATH. Engines we may not redistribute (Cake) are found this way instead of being bundled.
+    fn find_bin(&self, e: &Engine) -> Result<PathBuf, String> {
+        let var = format!("LE_{}_BIN", e.id.to_uppercase());
+        if let Ok(p) = std::env::var(&var) {
+            if !p.is_empty() {
+                return if Path::new(&p).is_file() { Ok(PathBuf::from(p)) } else { Err(format!("{var} is set to {p}, which is not a file")) };
+            }
+        }
+        let own = self.exe_path(e);
+        if own.is_file() { return Ok(own); }
+        let name = own.file_name().map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&e.id));
+        if let Some(paths) = std::env::var_os("PATH") {
+            for d in std::env::split_paths(&paths) {
+                let c = d.join(&name);
+                if c.is_file() { return Ok(c); }
+            }
+        }
+        Err(format!("{} is not installed here. Put its program at {} or on PATH, or set {var} to its full path.", e.name, own.display()))
+    }
+
+    /// The preload body for this computer, with {bin} and {dir} filled in; {model}, {port} and {worker_port}
+    /// are left for the engine itself.
+    fn preload_body(&self, e: &Engine) -> Result<Option<Value>, String> {
+        let Some(base) = &e.preload else { return Ok(None) };
+        let mut body = base.clone();
+        if let (Some(o), Some(Value::Object(over))) = (body.as_object_mut(), e.preload_platform.get(&this_platform())) {
+            for (k, v) in over { o.insert(k.clone(), v.clone()); }
+        }
+        let needs_bin = body.to_string().contains("{bin}");
+        let bin = if needs_bin { self.find_bin(e)?.to_string_lossy().to_string() } else { String::new() };
+        let dir = self.dir(&e.id).to_string_lossy().to_string();
+        fn fill(v: &mut Value, bin: &str, dir: &str) {
+            match v {
+                Value::String(s) => *s = s.replace("{bin}", bin).replace("{dir}", dir),
+                Value::Array(a) => a.iter_mut().for_each(|x| fill(x, bin, dir)),
+                Value::Object(o) => o.values_mut().for_each(|x| fill(x, bin, dir)),
+                _ => {}
+            }
+        }
+        fill(&mut body, &bin, &dir);
+        Ok(Some(body))
+    }
+
     /// A command for this engine: its folder as working directory and its environment filled in.
     fn command(&self, e: &Engine, program: impl AsRef<std::ffi::OsStr>, args: &[String]) -> Command {
         let mut c = Command::new(program);
@@ -578,7 +628,18 @@ async fn register(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Re
     let mut log = String::new();
     // Engines that need load options (e.g. Cake's port and command) are loaded on the engine first;
     // a request routed through Lemonade cannot pass them.
-    if let Some(body) = &e.preload {
+    let preload = match app.preload_body(&e) { Ok(b) => b, Err(m) => return err(StatusCode::CONFLICT, m) };
+    if let Some(pull) = &e.pull {
+        match app.http.post(format!("{base}/api/v1/pull")).json(pull).timeout(Duration::from_secs(3600)).send().await {
+            Ok(r) if r.status().is_success() => log += "Model pulled on the engine. ",
+            Ok(r) => {
+                let t = r.text().await.unwrap_or_default();
+                if !t.contains("already") { return err(StatusCode::BAD_GATEWAY, format!("Pull failed: {t}")); }
+            }
+            Err(x) => return err(StatusCode::BAD_GATEWAY, format!("Pull failed: {x}")),
+        }
+    }
+    if let Some(body) = &preload {
         match app.http.post(format!("{base}/api/v1/load")).json(body).timeout(Duration::from_secs(900)).send().await {
             Ok(r) if r.status().is_success() => log += "Preloaded on the engine. ",
             Ok(r) => return err(StatusCode::BAD_GATEWAY, format!("Preload failed: HTTP {} {}", r.status(), r.text().await.unwrap_or_default())),
@@ -819,6 +880,44 @@ mod tests {
         unpack(&path, &out).unwrap();
         assert!(out.join("llama-server.exe").exists(), "llama-server.exe is missing from {}", path.display());
         assert!(out.join("llama.dll").exists(), "llama.dll is missing from {}", path.display());
+    }
+
+    fn engine_with_preload() -> (App, Engine) {
+        let e: Engine = toml::from_str(r#"
+            id = "cake"
+            name = "Cake"
+            summary = "x"
+            licence = "x"
+            mode = "attach"
+            exe = "bin/cake"
+            preload = { model_name = "m", cake_args = "\"{bin}\" serve {model} --api 127.0.0.1:{port}" }
+            preload_platform = { "nowhere-nothing" = { cake_args = "never" } }
+        "#).unwrap();
+        let home = std::env::temp_dir().join(format!("le-preload-{}", std::process::id()));
+        let app = App { catalog: Catalog { engine: vec![e.clone()] }, home, lemonade: String::new(), http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) };
+        (app, e)
+    }
+
+    #[test]
+    fn preload_uses_the_cake_program_the_user_has_not_a_fixed_path() {
+        let (app, e) = engine_with_preload();
+        let fake = app.dir("cake").join("bin");
+        std::fs::create_dir_all(&fake).unwrap();
+        let exe = if cfg!(windows) { "cake.exe" } else { "cake" };
+        std::fs::write(fake.join(exe), b"").unwrap();
+        let body = app.preload_body(&e).unwrap().unwrap();
+        let args = body["cake_args"].as_str().unwrap();
+        assert!(args.contains(&fake.join(exe).to_string_lossy().to_string()), "{args}");
+        assert!(!args.contains("/home/cesarops"), "no machine-specific path may be baked in");
+        assert!(args.contains("{model}") && args.contains("{port}"), "the engine fills these in itself");
+        let _ = std::fs::remove_dir_all(&app.home);
+    }
+
+    #[test]
+    fn preload_says_what_is_missing_when_cake_is_not_there() {
+        let (app, e) = engine_with_preload();
+        let m = app.preload_body(&e).unwrap_err();
+        assert!(m.contains("LE_CAKE_BIN") && m.contains("not installed"), "{m}");
     }
 
     #[test]
