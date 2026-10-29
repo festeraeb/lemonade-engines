@@ -283,15 +283,32 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
         Err(e) => (false, Some(if e.is_timeout() { "no answer".into() } else { "not reachable".into() })),
     };
     let providers = app.providers().await;
-    let mut engines = vec![];
-    for e in &app.catalog.engine {
+    // Probe every engine at the same time. A refused connection to a stopped engine takes about 2 s on Windows, so six
+    // stopped engines probed one after another made this call take 12 s and the page showed "server answering" long
+    // after Stop had worked.
+    let mut probes = tokio::task::JoinSet::new();
+    for (i, e) in app.catalog.engine.iter().enumerate() {
+        let app = app.clone();
+        let id = e.id.clone();
         let base = app.base(e);
-        let up = match &base {
-            Some(b) => app.http.get(format!("{b}/v1/models")).timeout(Duration::from_secs(2)).send().await.map(|r| r.status().is_success()).unwrap_or(false),
-            None => false,
-        };
         let listed = providers.iter().any(|p| p["name"].as_str() == Some(&e.id));
-        let models = if listed { app.lemonade_models(&e.id).await } else { vec![] };
+        probes.spawn(async move {
+            let up = match &base {
+                Some(b) => app.http.get(format!("{b}/v1/models")).timeout(Duration::from_secs(2)).send().await.map(|r| r.status().is_success()).unwrap_or(false),
+                None => false,
+            };
+            let models = if listed { app.lemonade_models(&id).await } else { vec![] };
+            (i, up, models, listed)
+        });
+    }
+    let mut probed = vec![(false, vec![], false); app.catalog.engine.len()];
+    while let Some(r) = probes.join_next().await {
+        if let Ok((i, up, models, listed)) = r { probed[i] = (up, models, listed); }
+    }
+    let mut engines = vec![];
+    for (i, e) in app.catalog.engine.iter().enumerate() {
+        let base = app.base(e);
+        let (up, models, listed) = probed[i].clone();
         // Lemonade keeps the provider across restarts but forgets its runtime key, and then lists no models.
         // Count that as not registered, so Set up runs "Add to Lemonade" (which sets the key) again.
         let registered = listed && !models.is_empty();
@@ -899,7 +916,10 @@ mod tests {
             preload = { model_name = "m", cake_args = "\"{bin}\" serve {model} --api 127.0.0.1:{port}" }
             preload_platform = { "nowhere-nothing" = { cake_args = "never" } }
         "#).unwrap();
-        let home = std::env::temp_dir().join(format!("le-preload-{}", std::process::id()));
+        // One folder per call: the two preload tests run in parallel and one of them creates a fake Cake program.
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let home = std::env::temp_dir().join(format!("le-preload-{}-{n}", std::process::id()));
         let app = App { catalog: Catalog { engine: vec![e.clone()] }, home, lemonade: String::new(), http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) };
         (app, e)
     }
