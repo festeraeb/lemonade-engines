@@ -913,7 +913,9 @@ mod tests {
         std::fs::write(fake.join(exe), b"").unwrap();
         let body = app.preload_body(&e).unwrap().unwrap();
         let args = body["cake_args"].as_str().unwrap();
-        assert!(args.contains(&fake.join(exe).to_string_lossy().to_string()), "{args}");
+        // The launch line joins with "/" even on Windows, so compare with one separator.
+        let want = fake.join(exe).to_string_lossy().replace('\\', "/");
+        assert!(args.replace('\\', "/").contains(&want), "{args}");
         assert!(!args.contains("/home/cesarops"), "no machine-specific path may be baked in");
         assert!(args.contains("{model}") && args.contains("{port}"), "the engine fills these in itself");
         let _ = std::fs::remove_dir_all(&app.home);
