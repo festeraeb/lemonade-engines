@@ -1,4 +1,6 @@
-# Lemonade Engines
+# NautiK9 Lemonade Stand
+
+(Formerly "Lemonade Engines"; the program and repo keep the name `lemonade-engines`.)
 
 Add engines to the [Lemonade](https://github.com/lemonade-sdk/lemonade) server you already run.
 Each engine runs as its own OpenAI-compatible server on `127.0.0.1` and joins Lemonade as a

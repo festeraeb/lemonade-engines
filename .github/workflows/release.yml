@@ -91,5 +91,5 @@ jobs:
         run: |
           cd dist && sha256sum *.tar.gz | tee SHA256SUMS
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Lemonade Engines ${TAG#v}" --notes "Builds for Linux, Windows and macOS."
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "NautiK9 Lemonade Stand ${TAG#v}" --notes "Builds for Linux, Windows and macOS."
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber *.tar.gz SHA256SUMS
