@@ -1,3 +1,18 @@
+# Release notes and checklist: lemonade-engines v0.4.0 (not tagged, not pushed)
+
+New in v0.4.0: the `ternlight` embeddings engine and the "Bitter Lemons" group with the `movidius` (Intel NCS1) engine.
+Catalogue fields added: `kind` (chat, embeddings, vision), `group`, `group_note`, `requires_usb`, `user_file`, `firmware`, `pending`.
+New routes: `POST /api/engines/{id}/usb` and `/firmware` (the latter downloads only with `{"accept": true}`).
+Release order: ternlight-server v0.1.1 (done, public) and movidius-rust v0.3.0 (done, public), then tag this.
+
+Before tagging v0.4.0:
+- Pins to check: ternlight-server v0.1.1 SHA256SUMS (four archives, already in `assets/engines.toml`), movidius-rust v0.3.0 tarball sha256 `067f6d27...2e69c`.
+- Movidius needs a compiled graph from the user (`LE_MOVIDIUS_GRAPH`). Decide whether to publish a SqueezeNet v1.1 graph on a release so Set up needs nothing else.
+- Lemonade 2026.43.3 does not forward `/v1/embeddings` to cloud providers; the ternlight test therefore passes on the engine's own answer and prints Lemonade's refusal.
+- Re-run the e2e against the CI-built Stand binaries on Linux, Windows (needs github.com reachable from the Windows box) and the stick machine.
+
+---
+
 # Release checklist: lemonade-engines v0.3.0
 
 Nothing here has been pushed, tagged or released. Branch to release from: `finish/entries-2026-10-28`

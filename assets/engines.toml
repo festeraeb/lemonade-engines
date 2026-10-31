@@ -173,3 +173,70 @@ platform = "x86_64-windows"
 source = "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/main/Ternary-Bonsai-8B-PQ2_0.gguf"
 dest = "Ternary-Bonsai-8B-PQ2_0.gguf"
 sha256 = "1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922"
+
+[[engine]]
+id = "ternlight"
+name = "ternlight (ternary sentence embeddings)"
+summary = "A 384-dimension sentence-embedding model with ternary weights, served at /v1/embeddings. Runs on the CPU, about 5 MB, nothing else to download. Lemonade then lists it as an embeddings provider."
+licence = "Server: Apache-2.0. Engine and model: MIT (Wenshu Tang, github.com/soycaporal/ternlight)"
+hardware = "Linux x86-64 (glibc 2.31 or newer), Windows x86-64 or macOS (Intel or Apple silicon); no GPU; a few hundred MB of RAM; a 4 MB download."
+kind = "embeddings"
+mode = "managed"
+port = 13443
+test_model = "ternlight-base"
+exe = "ternlight-server"
+args = ["--host", "127.0.0.1", "--port", "{port}"]
+note = "This is an embeddings model, not a chat model: the test asks the engine for the vectors of three sentences and shows their size, the time, and whether the two sentences about the same thing sit closer together than the unrelated one. It then tries the same request through Lemonade and says what happened: Lemonade 2026.43.3 lists the provider but does not forward embeddings requests to cloud providers, so apps should use the address shown."
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-linux.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-linux.tar.gz"
+sha256 = "533462b0fd82f38a8c07510b2caad2e93f1620f2a636764436b2c916d7f882e0"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-windows.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-windows.tar.gz"
+sha256 = "8b11e63c042cd0be0736dac8376262d86c66942b14dbac760f0fd9b6d7edbe45"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-macos.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-macos.tar.gz"
+sha256 = "fa74bfa98ceb8d2555eadefdaf964739180c8072508a773644568a50025adf14"
+platform = "x86_64-macos"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-aarch64-macos.tar.gz"
+dest = "ternlight-server-0.1.1-aarch64-macos.tar.gz"
+sha256 = "9725f5a1f6efbaed57c0bbd47650c67cf257aa8e38818eb5def7b7162c3adf6a"
+platform = "aarch64-macos"
+
+[[engine]]
+id = "movidius"
+name = "Movidius NCS1 vision graph (movidius-rust)"
+group = "Bitter Lemons"
+group_note = "Bitter Lemons: vision hardware on the Lemonade stand. These engines see; they do not chat."
+summary = "Runs a compiled vision network on an Intel Movidius Neural Compute Stick 1 through a pure-Rust host (no OpenVINO). Lemonade lists the graph as a model that does not generate text; real inference is POST /v1/infer on the engine. Chat answers HTTP 501 on purpose."
+licence = "movidius-rust: Apache-2.0. Intel's firmware is separate, is not included, and is downloaded only after you accept it."
+licence_url = "https://github.com/festeraeb/movidius-rust"
+hardware = "Linux x86-64 and an Intel NCS1 USB stick (USB id 03e7:2150 or 03e7:f63b). Needs a compiled NCSDK v1 .graph file (see the note)."
+kind = "vision"
+mode = "managed"
+port = 13460
+exe = "movidius-rust-v0.3.0-linux-x86_64/movidius-rust"
+args = ["serve", "--model", "models/model.graph", "--host", "127.0.0.1", "--port", "{port}", "--firmware", "{dir}/firmware/MvNCAPI-ma2450.mvcmd"]
+requires_usb = ["03e7:2150", "03e7:f63b"]
+note = "The stick must be plugged in; Set up says plainly when it is not. The program needs a compiled graph that you provide: set LE_MOVIDIUS_GRAPH to its path (a SqueezeNet v1.1 graph works; tools/ncs1-compile in the movidius-rust repository builds one). Reset rule: the stick must be reset after a graph has run and before another is loaded; the program does this itself. Do not unplug it while running."
+[engine.user_file]
+dest = "models/model.graph"
+env = "LE_MOVIDIUS_GRAPH"
+help = "Movidius needs a compiled NCSDK v1 graph. Set LE_MOVIDIUS_GRAPH to its path and press Set up again."
+[engine.firmware]
+description = "Intel's NCSDK 1.12.01.01 device firmware (MvNCAPI.mvcmd), (c) Intel. Intel's own download address now answers 403, so this is the Internet Archive snapshot of it. Intel's licence is not ours to grant: read it in the NCSDK archive before you accept."
+source = "https://web.archive.org/web/20191119142208id_/https://downloadmirror.intel.com/28192/eng/NCSDK-1.12.01.01.tar.gz"
+sha256 = "df5261ab79697f3c564279010aebbc8fd171f57290a84f636201aee82368a3b2"
+member = "NCSDK-1.12.01.01/ncsdk-x86_64/fw/MvNCAPI.mvcmd"
+md5 = "0f0eb9f1a529f2ef55c09d9fae72eb95"
+dest = "firmware/MvNCAPI-ma2450.mvcmd"
+[[engine.files]]
+source = "https://github.com/festeraeb/movidius-rust/releases/download/v0.3.0/movidius-rust-v0.3.0-linux-x86_64.tar.gz"
+dest = "movidius-rust-v0.3.0-linux-x86_64.tar.gz"
+sha256 = "067f6d27ab9619fa63d89e01979f01f00ec629d593547bc731c5e51207c2e69c"
+platform = "x86_64-linux"

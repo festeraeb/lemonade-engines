@@ -58,6 +58,7 @@ a { color: var(--accent); }
 .answer { font-family: var(--sans); font-size: 14px; color: var(--ink); display: block; margin-top: 4px; }
 .licence { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; }
 .licence p { margin: 0; }
+.group { margin-top: 10px; } .group h2 { font-size: 1.25rem; margin: 0; }
 .note { font-size: 13px; color: var(--muted); margin: 0; }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 14px; }
 .steps li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
@@ -87,7 +88,8 @@ const results = {};
 let busy = {};
 
 const setups = {};  // id -> [{act, label, status: "wait"|"run"|"done"|"fail", msg}]
-const STEP_LABEL = {install: "Install the files", plan: "Show what it will download", start: "Start the server", check: "Find the running server", register: "Add to Lemonade", test: "Ask a test question"};
+const STEP_LABEL = {usb: "Look for the USB device", install: "Install the files", plan: "Show what it will download", firmware: "Download the vendor firmware (accepted)", start: "Start the server", check: "Find the running server", register: "Add to Lemonade", test: "Ask a test question"};
+const TEST_LABEL = {embeddings: "Ask for embeddings", vision: "Read the model list"};
 
 async function post(id, act, body) {
   const action = act === "check" ? "start" : act;
@@ -101,17 +103,21 @@ async function post(id, act, body) {
 async function setup(id, accept, acceptPlan) {
   const x = lastState.engines.find(v => v.engine.id === id); if (!x) return;
   const e = x.engine, steps = [];
+  const needFw = e.firmware && !x.firmware_present;
+  if (e.requires_usb && e.requires_usb.length) steps.push("usb");
   // Attach engines have nothing to install, but a licence-gated one records the acceptance in this step.
   if ((e.mode === "managed" && !x.installed) || (e.accept_licence && !x.accepted)) steps.push("install");
   if (!x.up && e.plan_args && e.plan_args.length && !x.plan_accepted && !acceptPlan) steps.push("plan");
+  else if (needFw && !acceptPlan) steps.push("plan");
+  if (needFw && acceptPlan) steps.push("firmware");
   if (!x.up) steps.push(e.mode === "attach" ? "check" : "start");
   if (!x.registered) steps.push("register");
   steps.push("test");
-  setups[id] = steps.map(act => ({act, label: STEP_LABEL[act], status: "wait", msg: ""}));
+  setups[id] = steps.map(act => ({act, label: act === "test" ? (TEST_LABEL[e.kind] || STEP_LABEL.test) : STEP_LABEL[act], status: "wait", msg: ""}));
   busy[id] = "setup"; delete results[id]; render(lastState);
   for (const st of setups[id]) {
     st.status = "run"; render(lastState);
-    const body = st.act === "install" && accept ? {accept_licence: true} : st.act === "start" && acceptPlan ? {accept_plan: true} : undefined;
+    const body = st.act === "install" && accept ? {accept_licence: true} : st.act === "start" && acceptPlan ? {accept_plan: true} : st.act === "firmware" ? {accept: true} : undefined;
     // Long steps: show the newest log line every few seconds.
     const poll = (st.act === "install" || st.act === "start") ? setInterval(async () => {
       try { const l = await (await fetch(`/api/engines/${id}/log`)).json(); if (l.line && st.status === "run") { st.msg = l.line; render(lastState); } } catch (_) {}
@@ -162,10 +168,19 @@ function resultBox(id) {
   if (r.action === "plan") {
     return `<div class="out">${esc(r.plan)}</div><div class="actions"><button class="primary big" data-act="setup" data-id="${id}" data-plan="1" ${busy[id] ? "disabled" : ""}>Download and start</button></div>`;
   }
+  if (r.action === "test" && r.kind === "embeddings") {
+    const u = r.usage || {};
+    const tok = u.prompt_tokens ? `, ${u.prompt_tokens} tokens` : "";
+    const via = r.via_lemonade_ok ? `Through Lemonade as ${esc(r.lemonade_model)}: ${esc(r.via_lemonade)}.` : `Through Lemonade as ${esc(r.lemonade_model)}: not available (${esc(r.via_lemonade)}). This Lemonade lists the provider but does not forward embeddings requests to it; apps can use the engine's address directly.`;
+    return `<div class="out test">from the engine <b>${esc(r.model)}</b>: ${r.count} sentences became ${r.count} vectors of <b>${r.dimensions} dimensions</b> in ${(r.seconds * 1000).toFixed(0)} ms${tok}<span class="answer">Closeness (cosine): "${esc(r.sentences[0])}" and "${esc(r.sentences[1])}" = ${r.similar.toFixed(3)}; with "${esc(r.sentences[2])}" = ${r.different.toFixed(3)}. ${r.similar > r.different ? "The related pair is closer, as it should be." : "The related pair is NOT closer; something is wrong."} ${via}</span></div>`;
+  }
+  if (r.action === "test" && r.kind === "vision") {
+    return `<div class="out test">model list read from the engine in ${(r.seconds * 1000).toFixed(0)} ms: <b>${esc(r.model)}</b>, generates_text: <b>${esc(r.generates_text)}</b>. Lemonade lists ${r.in_lemonade.length ? esc(r.in_lemonade.join(", ")) : "nothing yet"}. Chat on the engine answers HTTP ${esc(r.chat_status ?? "(no answer)")}${r.chat_status === 501 ? ", by design: the stick runs vision graphs, not language models" : ""}.<span class="answer">Send an image to POST /v1/infer on the engine to run the graph.</span></div>`;
+  }
   if (r.action === "test") {
     const u = r.usage || {};
     const tok = u.completion_tokens ? `, ${u.completion_tokens} tokens, ${(u.completion_tokens / r.seconds).toFixed(1)} tok/s end to end` : "";
-    return `<div class="out">through Lemonade as <b>${esc(r.model)}</b> (answered by ${esc(r.served_by)}) in ${r.seconds.toFixed(1)} s${tok}<span class="answer">${r.answer && r.answer.trim() ? esc(r.answer) : "The model returned no visible text (it may have spent its tokens on reasoning)."}</span></div>`;
+    return `<div class="out test">through Lemonade as <b>${esc(r.model)}</b> (answered by ${esc(r.served_by)}) in ${r.seconds.toFixed(1)} s${tok}<span class="answer">${r.answer && r.answer.trim() ? esc(r.answer) : "The model returned no visible text (it may have spent its tokens on reasoning)."}</span></div>`;
   }
   return `<div class="out">${esc(r.message)}${r.models ? "\n" + r.models.map(esc).join("\n") : ""}</div>`;
 }
@@ -177,6 +192,7 @@ function render(s) {
   $("#ldot").className = "dot " + (L.ok ? "ok" : "bad");
   $("#lstat").textContent = L.ok ? `running, version ${L.version}` : `not reachable (${L.version || "no answer"})`;
   $("#lurl").textContent = L.url;
+  let lastGroup = null;
   $("#engines").innerHTML = s.engines.map(x => {
     const e = x.engine, id = e.id, b = busy[id];
     const needAccept = e.accept_licence && !x.accepted;
@@ -186,6 +202,9 @@ function render(s) {
       `<span class="chip ${x.registered ? "on" : ""}">${x.registered ? `in Lemonade: ${x.models.length} model(s)` : "not in Lemonade"}</span>`,
       needAccept ? `<span class="chip warn">licence not accepted</span>` : "",
       x.available === false ? `<span class="chip warn">no build for this computer (${esc(lastState.platform)}) yet</span>` : "",
+      x.usb && !x.usb.length ? `<span class="chip warn">no stick found</span>` : x.usb ? `<span class="chip on">USB device found</span>` : "",
+      e.firmware ? `<span class="chip ${x.firmware_present ? "on" : "warn"}">${x.firmware_present ? "firmware downloaded" : "firmware not downloaded"}</span>` : "",
+      e.pending ? `<span class="chip warn">goes live once its release is published</span>` : "",
     ].join("");
     const dis = c => (b || c) ? "disabled" : "";
     const ready = x.up && x.registered;
@@ -204,11 +223,15 @@ function render(s) {
       ${x.registered ? `<button data-act="unregister" data-id="${id}" ${dis()}>Remove from Lemonade</button>` : ""}
       ${x.running_here ? `<button data-act="stop" data-id="${id}" ${dis()}>Stop</button>` : ""}
     </div></details>`;
-    return `<section class="eng" aria-labelledby="h-${id}">
+    const g = e.group || null;
+    const heading = g && g !== lastGroup ? `<div class="group"><h2>${esc(g)}</h2>${e.group_note ? `<p class="note">${esc(e.group_note)}</p>` : ""}</div>` : "";
+    lastGroup = g;
+    return heading + `<section class="eng" aria-labelledby="h-${id}">
       <div class="head"><h2 id="h-${id}">${esc(e.name)}</h2><span class="id">${esc(id)}</span></div>
       <p class="sum">${esc(e.summary)}</p>
       <dl class="meta"><dt>Licence</dt><dd>${esc(e.licence)}</dd>${e.hardware ? `<dt>Needs</dt><dd>${esc(e.hardware)}</dd>` : ""}${x.base ? `<dt>Address</dt><dd>${esc(x.base)}/v1</dd>` : ""}</dl>
       ${e.note ? `<p class="note">${esc(e.note)}</p>` : ""}
+      ${e.pending ? `<p class="note">${esc(e.pending)}</p>` : ""}
       <div class="chips">${chips}</div>${licence}${main}${stepList(id)}${resultBox(id)}${steps}
     </section>`;
   }).join("");

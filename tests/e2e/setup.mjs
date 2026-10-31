@@ -3,6 +3,7 @@
 //
 //   node setup.mjs --url http://127.0.0.1:13500 --engine burn [--channel chrome|msedge] [--exe /usr/bin/google-chrome]
 //                  [--accept] [--plan] [--shots DIR] [--timeout-min 30] [--no-stop]
+// --expect-fail TEXT: pass when a step fails with TEXT in its message (e.g. "No stick found" on a machine without the stick).
 // --accept: press "Accept and set up" (licence-gated engines). --plan: after the plan is shown, press "Download and start".
 import { chromium } from "playwright-core";
 import fs from "node:fs";
@@ -33,7 +34,7 @@ try {
     await sec.locator(sel).first().click();
   };
   await setupBtn(false);
-  const done = sec.locator(".out:has-text('through Lemonade as'), .out.err, .out:not(.err):has(+ .actions button[data-plan]), ol.steps li.fail");
+  const done = sec.locator(".out.test, .out.err, .out:not(.err):has(+ .actions button[data-plan]), ol.steps li.fail");
   await done.first().waitFor({ timeout: timeoutMs });
   const planShown = await sec.locator('button[data-plan]').count();
   if (planShown && !opt("plan")) {
@@ -48,10 +49,15 @@ try {
     console.log("PLAN:", (await sec.locator(".out").first().innerText()).slice(0, 600));
     await shot("plan");
     await setupBtn(true);
-    await sec.locator(".out:has-text('through Lemonade as'), ol.steps li.fail, .out.err").first().waitFor({ timeout: timeoutMs });
+    await sec.locator(".out.test, ol.steps li.fail, .out.err").first().waitFor({ timeout: timeoutMs });
   }
   console.log("STEPS:\n  " + (await steps()).join("\n  "));
-  const text = await sec.locator(".out:has-text('through Lemonade as')").first().innerText().catch(() => "");
+  const want = opt("expect-fail");
+  if (want && want !== true && (await steps()).some(t => t.startsWith("failed") && t.includes(want))) {
+    console.log(`EXPECTED FAILURE seen: ${want}`);
+    await shot("expected-fail"); await browser.close(); console.log("RESULT PASS (expected failure)"); process.exit(0);
+  }
+  const text = await sec.locator(".out.test").first().innerText().catch(() => "");
   const answer = (await sec.locator(".answer").first().innerText().catch(() => "")).trim();
   if (text && answer.startsWith("The model returned no visible text")) console.log("EMPTY ANSWER: the engine answered but returned no text, so this is not a pass");
   else if (text) { ok = true; console.log("TEST CHAT:", text.replace(/\n+/g, " | ")); }

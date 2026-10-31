@@ -88,6 +88,57 @@ struct Engine {
     /// How long Start waits for /v1/models, in seconds (default 120).
     #[serde(default)]
     start_wait_s: Option<u64>,
+    /// What the test sends: "chat" (default), "embeddings" (a /v1/embeddings call through Lemonade) or "vision"
+    /// (a read of the engine's own /v1/models, for engines that run compiled vision graphs and cannot chat).
+    #[serde(default)]
+    kind: Option<String>,
+    /// Set while the release the pinned files point at is not published yet; the page says so.
+    #[serde(default)]
+    pending: Option<String>,
+    /// Heading the page lists this engine under (e.g. "Bitter Lemons").
+    #[serde(default)]
+    group: Option<String>,
+    /// Plain-text blurb shown with the group heading (taken from the first engine of the group that has one).
+    #[serde(default)]
+    group_note: Option<String>,
+    /// USB devices ("vid:pid", hex) of which one must be plugged in. Checked first; Linux only.
+    #[serde(default)]
+    requires_usb: Vec<String>,
+    /// A file the user has to supply (we do not ship it): copied from `env` on install, or reported as missing.
+    #[serde(default)]
+    user_file: Option<UserFile>,
+    /// Third-party firmware we must not redistribute: shown to the user, downloaded only after an explicit accept.
+    #[serde(default)]
+    firmware: Option<Firmware>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct UserFile {
+    /// Path inside the engine folder.
+    dest: String,
+    /// Environment variable that names a file to copy there.
+    env: String,
+    /// Said when the file is missing.
+    help: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Firmware {
+    /// Where the vendor published it, shown to the user.
+    description: String,
+    /// Download address of the archive and its sha256.
+    source: String,
+    sha256: String,
+    /// The one file wanted from the (tar.gz) archive, its md5 and where it is saved inside the engine folder.
+    member: String,
+    md5: String,
+    dest: String,
+}
+
+impl Engine {
+    fn kind(&self) -> &str {
+        self.kind.as_deref().unwrap_or("chat")
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -214,7 +265,10 @@ impl App {
         c
     }
     fn installed(&self, e: &Engine) -> bool {
-        e.mode == "attach" || (e.available_here() && e.files_here().iter().all(|f| self.dir(&e.id).join(&f.dest).exists()))
+        e.mode == "attach"
+            || (e.available_here()
+                && e.files_here().iter().all(|f| self.dir(&e.id).join(&f.dest).exists())
+                && e.user_file.as_ref().map_or(true, |u| self.dir(&e.id).join(&u.dest).is_file()))
     }
 
     async fn lemonade_cli(&self, args: &[&str]) -> Result<String, String> {
@@ -271,6 +325,120 @@ impl App {
     }
 }
 
+
+/// Plugged-in USB devices as "vid:pid" (lower-case hex), read from sysfs. Empty where that is not available.
+fn usb_devices() -> Vec<String> {
+    let mut out = vec![];
+    let Ok(rd) = std::fs::read_dir("/sys/bus/usb/devices") else { return out };
+    for d in rd.flatten() {
+        let read = |n: &str| std::fs::read_to_string(d.path().join(n)).ok().map(|t| t.trim().to_lowercase());
+        if let (Some(v), Some(p)) = (read("idVendor"), read("idProduct")) { out.push(format!("{v}:{p}")); }
+    }
+    out
+}
+
+/// Which of the wanted "vid:pid" devices are plugged in.
+fn usb_found(want: &[String]) -> Vec<String> {
+    let here = usb_devices();
+    want.iter().map(|w| w.to_lowercase()).filter(|w| here.contains(w)).collect()
+}
+
+fn md5_hex(path: &Path) -> Result<String, String> {
+    use md5::{Digest as _, Md5};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut h = Md5::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 { break; }
+        h.update(&buf[..n]);
+    }
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+impl Firmware {
+    /// What the user is shown before anything is downloaded.
+    fn plan_text(&self, name: &str) -> String {
+        format!(
+            "{name} needs a vendor firmware file that this program does not contain and may not hand out.\n\n{}\n\nDownload: {}\nArchive sha256: {}\nFile wanted: {} (md5 {})\n\nPress \"Download and start\" to fetch it from that address now. Both checksums are checked, and the file is kept only if they match.",
+            self.description, self.source, self.sha256, self.member, self.md5
+        )
+    }
+}
+
+/// Download the firmware archive, check its sha256, take out the one wanted file, check its md5 and save it.
+async fn get_firmware(app: &App, e: &Engine, fw: &Firmware) -> Result<(), String> {
+    let dir = app.dir(&e.id);
+    let dest = dir.join(&fw.dest);
+    if dest.is_file() && md5_hex(&dest).map_or(false, |m| m.eq_ignore_ascii_case(&fw.md5)) { return Ok(()); }
+    let work = dir.join("firmware-download");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(|x| x.to_string())?;
+    let archive = work.join("firmware.tar.gz");
+    let mut r = app.http.get(&fw.source).send().await.map_err(|x| format!("download {}: {x}", fw.source))?;
+    if !r.status().is_success() { return Err(format!("download {}: HTTP {}", fw.source, r.status())); }
+    let mut out = tokio::fs::File::create(&archive).await.map_err(|x| x.to_string())?;
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = r.chunk().await.map_err(|x| format!("download {}: {x}", fw.source))? {
+        hasher.update(&chunk);
+        out.write_all(&chunk).await.map_err(|x| x.to_string())?;
+    }
+    out.flush().await.map_err(|x| x.to_string())?;
+    drop(out);
+    let got = format!("{:x}", hasher.finalize());
+    if !got.eq_ignore_ascii_case(&fw.sha256) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(format!("the firmware archive's sha256 is {got}, expected {}. Nothing was kept.", fw.sha256));
+    }
+    let st = Command::new("tar").arg("xzf").arg(&archive).arg("-C").arg(&work).arg(&fw.member).status().await.map_err(|x| x.to_string())?;
+    if !st.success() { return Err(format!("could not take {} out of the archive", fw.member)); }
+    let member = work.join(&fw.member);
+    let got = md5_hex(&member)?;
+    if !got.eq_ignore_ascii_case(&fw.md5) {
+        let _ = std::fs::remove_dir_all(&work);
+        return Err(format!("{} has md5 {got}, expected {}. Nothing was kept.", fw.member, fw.md5));
+    }
+    if let Some(p) = dest.parent() { std::fs::create_dir_all(p).map_err(|x| x.to_string())?; }
+    std::fs::copy(&member, &dest).map_err(|x| format!("saving {}: {x}", dest.display()))?;
+    let _ = std::fs::remove_dir_all(&work);
+    Ok(())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FirmwareReq {
+    #[serde(default)]
+    accept: bool,
+}
+
+async fn firmware(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<FirmwareReq>>) -> Response {
+    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(fw) = e.firmware.clone() else { return Json(json!({"ok": true, "message": "This engine needs no firmware."})).into_response() };
+    let dest = app.dir(&id).join(&fw.dest);
+    if dest.is_file() { return Json(json!({"ok": true, "message": "Firmware already in place."})).into_response(); }
+    if !body.map(|b| b.0).unwrap_or_default().accept {
+        return err(StatusCode::FORBIDDEN, "The firmware is downloaded only after you accept it.");
+    }
+    match get_firmware(&app, &e, &fw).await {
+        Ok(()) => Json(json!({"ok": true, "message": format!("Firmware downloaded and both checksums matched ({}).", fw.md5)})).into_response(),
+        Err(m) => err(StatusCode::BAD_GATEWAY, m),
+    }
+}
+
+/// Look for the stick (or whatever hardware `requires_usb` names) and say plainly if it is not there.
+async fn usb(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    if e.requires_usb.is_empty() { return Json(json!({"ok": true, "message": "No USB device needed."})).into_response(); }
+    if !cfg!(target_os = "linux") {
+        return err(StatusCode::NOT_IMPLEMENTED, "USB detection here only works on Linux, and this engine only runs there.");
+    }
+    let found = usb_found(&e.requires_usb);
+    if found.is_empty() {
+        return err(StatusCode::CONFLICT, format!("No stick found. Looked for USB device {}. Plug it in and press Set up again.", e.requires_usb.join(" or ")));
+    }
+    Json(json!({"ok": true, "message": format!("Found USB device {}.", found.join(", "))})).into_response()
+}
+
 async fn page() -> Html<&'static str> {
     Html(PAGE)
 }
@@ -319,6 +487,9 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
             "accepted": app.dir(&e.id).join("licence-accepted").exists(),
             "available": e.mode == "attach" || e.available_here(),
             "plan_accepted": e.plan_args.is_empty() || app.dir(&e.id).join("plan-accepted").exists(),
+            "usb": if e.requires_usb.is_empty() { Value::Null } else { json!(usb_found(&e.requires_usb)) },
+            "firmware_present": e.firmware.as_ref().map(|f| app.dir(&e.id).join(&f.dest).is_file()),
+            "user_file_present": e.user_file.as_ref().map(|f| app.dir(&e.id).join(&f.dest).is_file()),
         }));
     }
     Json(json!({"lemonade": {"url": app.lemonade, "ok": lemonade_ok, "version": version}, "platform": this_platform(), "engines": engines}))
@@ -498,6 +669,20 @@ async fn install(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: 
         if dir.join(&f.dest).exists() { continue; }
         if let Err(m) = fetch(&app, &e, f, &dir).await { return err(StatusCode::BAD_GATEWAY, m); }
     }
+    if let Some(u) = &e.user_file {
+        let dst = dir.join(&u.dest);
+        if !dst.is_file() {
+            let from = std::env::var(&u.env).ok().filter(|v| !v.is_empty());
+            match from {
+                Some(p) if Path::new(&p).is_file() => {
+                    if let Some(d) = dst.parent() { let _ = std::fs::create_dir_all(d); }
+                    if let Err(m) = std::fs::copy(&p, &dst) { return err(StatusCode::INTERNAL_SERVER_ERROR, format!("copying {p}: {m}")); }
+                }
+                Some(p) => return err(StatusCode::CONFLICT, format!("{} is set to {p}, which is not a file. {}", u.env, u.help)),
+                None => return err(StatusCode::CONFLICT, format!("{} Or put the file at {}.", u.help, dst.display())),
+            }
+        }
+    }
     Json(json!({"ok": true, "message": format!("Installed in {} ({:.1} s)", dir.display(), t0.elapsed().as_secs_f32())})).into_response()
 }
 
@@ -525,6 +710,11 @@ async fn start(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Op
     if !app.installed(&e) { return err(StatusCode::CONFLICT, "Install it first."); }
     if wait_up(&app, &base, 1).await {
         return Json(json!({"ok": true, "message": format!("Already running at {base}")})).into_response();
+    }
+    if let Some(fw) = &e.firmware {
+        if !app.dir(&id).join(&fw.dest).is_file() {
+            return (StatusCode::CONFLICT, Json(json!({"ok": false, "needs_plan": true, "error": "The firmware has not been downloaded yet. Review it and accept first."}))).into_response();
+        }
     }
     let dir = app.dir(&id);
     if !e.plan_args.is_empty() && !dir.join("plan-accepted").exists() {
@@ -620,6 +810,9 @@ async fn shutdown_signal() {
 
 async fn plan(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
     let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    if let Some(fw) = &e.firmware {
+        if !app.dir(&id).join(&fw.dest).is_file() { return Json(json!({"ok": true, "plan": fw.plan_text(&e.name)})).into_response(); }
+    }
     if e.plan_args.is_empty() { return Json(json!({"ok": true, "plan": null})).into_response(); }
     if !app.installed(&e) { return err(StatusCode::CONFLICT, "Install it first."); }
     let run = app.command(&e, app.exe_path(&e), &e.plan_args).output();
@@ -692,6 +885,20 @@ async fn unregister(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> 
     }
 }
 
+/// Cosine similarity of two equal-length vectors.
+fn cosine(a: &[f64], b: &[f64]) -> f64 {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f64 = a.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let nb: f64 = b.iter().map(|x| x * x).sum::<f64>().sqrt();
+    if na == 0.0 || nb == 0.0 { 0.0 } else { dot / (na * nb) }
+}
+
+const EMBED_TEST: [&str; 3] = [
+    "A lighthouse guides ships at night.",
+    "A beacon on the coast helps boats find their way in the dark.",
+    "The tax forms are due in April.",
+];
+
 async fn test(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
     let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let models = app.lemonade_models(&id).await;
@@ -699,6 +906,77 @@ async fn test(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Respon
         Some(m) if models.iter().any(|x| x == &format!("{id}.{m}")) => format!("{id}.{m}"),
         _ => match models.first() { Some(m) => m.clone(), None => return err(StatusCode::CONFLICT, "Lemonade lists no models for this engine. Register it first.") },
     };
+    match e.kind() {
+        "embeddings" => test_embeddings(&app, &e, &model).await,
+        "vision" => test_vision(&app, &e, &models).await,
+        _ => test_chat(&app, &model).await,
+    }
+}
+
+/// POST the three test sentences to `{root}/embeddings` (root is "<lemonade>/api/v1" or "<engine>/v1") and return
+/// (dimensions, seconds, similar, different, model, usage), or why it failed.
+async fn embed_once(app: &App, root: &str, model: &str, lemonade: bool) -> Result<Value, String> {
+    let t0 = Instant::now();
+    let rb = app.http.post(format!("{root}/embeddings")).json(&json!({"model": model, "input": EMBED_TEST})).timeout(Duration::from_secs(300));
+    let r = (if lemonade { app.lemonade_req(rb) } else { rb }).send().await.map_err(|x| x.to_string())?;
+    let secs = t0.elapsed().as_secs_f32();
+    let status = r.status();
+    let v: Value = r.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        let m = v["error"]["message"].as_str().map(String::from).unwrap_or_else(|| v.to_string());
+        return Err(format!("HTTP {status}: {m}"));
+    }
+    let vecs: Vec<Vec<f64>> = v["data"].as_array().map(|a| {
+        a.iter().map(|d| d["embedding"].as_array().map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default()).collect()
+    }).unwrap_or_default();
+    if vecs.len() != EMBED_TEST.len() || vecs.iter().any(|x| x.is_empty() || x.len() != vecs[0].len()) {
+        return Err(format!("expected {} vectors of the same size, got: {}", EMBED_TEST.len(), v.to_string().chars().take(300).collect::<String>()));
+    }
+    Ok(json!({"dimensions": vecs[0].len(), "seconds": secs, "similar": cosine(&vecs[0], &vecs[1]), "different": cosine(&vecs[0], &vecs[2]), "served_by": v["model"], "usage": v["usage"]}))
+}
+
+/// Embeddings are not chat. Ask the engine itself for the vectors of three sentences (size, time, and whether the two
+/// sentences about the same thing sit closer than the unrelated one), then ask the same through Lemonade and report
+/// what Lemonade does: Lemonade 2026.43.3 does not forward /embeddings to cloud providers, which is its limit, not a
+/// fault of the engine, so only the direct call decides pass or fail.
+async fn test_embeddings(app: &App, e: &Engine, model: &str) -> Response {
+    let Some(base) = app.base(e) else { return err(StatusCode::BAD_REQUEST, "engine has no address") };
+    let own_id = model.split_once('.').map(|x| x.1).unwrap_or(model);
+    let direct = match embed_once(app, &format!("{base}/v1"), own_id, false).await {
+        Ok(v) => v,
+        Err(m) => return err(StatusCode::BAD_GATEWAY, format!("Embeddings from the engine itself failed: {m}")),
+    };
+    let via = embed_once(app, &format!("{}/api/v1", app.lemonade), model, true).await;
+    let (via_ok, via_msg) = match &via { Ok(v) => (true, format!("{} dimensions in {:.0} ms", v["dimensions"], v["seconds"].as_f64().unwrap_or(0.0) * 1000.0)), Err(m) => (false, m.clone()) };
+    Json(json!({
+        "ok": true, "kind": "embeddings", "model": own_id, "lemonade_model": model, "dimensions": direct["dimensions"], "count": EMBED_TEST.len(),
+        "seconds": direct["seconds"], "served_by": direct["served_by"], "usage": direct["usage"],
+        "similar": direct["similar"], "different": direct["different"], "sentences": EMBED_TEST,
+        "via_lemonade_ok": via_ok, "via_lemonade": via_msg,
+    })).into_response()
+}
+
+/// A vision-graph engine cannot chat, so the test reads its model list straight from the engine and also shows
+/// what its chat route answers (HTTP 501 is by design, not a failure).
+async fn test_vision(app: &App, e: &Engine, in_lemonade: &[String]) -> Response {
+    let Some(base) = app.base(e) else { return err(StatusCode::BAD_REQUEST, "engine has no address") };
+    let t0 = Instant::now();
+    let r = app.http.get(format!("{base}/v1/models")).timeout(Duration::from_secs(10)).send().await;
+    let secs = t0.elapsed().as_secs_f32();
+    let r = match r { Ok(r) => r, Err(x) => return err(StatusCode::BAD_GATEWAY, format!("{base}/v1/models: {x}")) };
+    let v: Value = r.json().await.unwrap_or(Value::Null);
+    let Some(m) = v["data"].as_array().and_then(|a| a.first()).cloned() else {
+        return err(StatusCode::BAD_GATEWAY, format!("{base}/v1/models lists no graph: {v}"));
+    };
+    let chat = app.http.post(format!("{base}/v1/chat/completions")).json(&json!({"model": m["id"], "messages": [{"role": "user", "content": "hi"}]}))
+        .timeout(Duration::from_secs(10)).send().await.map(|r| r.status().as_u16()).ok();
+    Json(json!({
+        "ok": true, "kind": "vision", "model": m["id"], "generates_text": m["generates_text"], "graph": m,
+        "seconds": secs, "in_lemonade": in_lemonade, "chat_status": chat,
+    })).into_response()
+}
+
+async fn test_chat(app: &App, model: &str) -> Response {
     let t0 = Instant::now();
     let r = app.lemonade_req(app.http.post(format!("{}/api/v1/chat/completions", app.lemonade)))
         .json(&json!({"model": model, "max_tokens": 48, "messages": [{"role": "user", "content": "In one sentence, what is a lighthouse for?"}]}))
@@ -750,6 +1028,8 @@ async fn main() {
         .route("/api/engines/{id}/unregister", post(unregister))
         .route("/api/engines/{id}/test", post(test))
         .route("/api/engines/{id}/plan", post(plan))
+        .route("/api/engines/{id}/usb", post(usb))
+        .route("/api/engines/{id}/firmware", post(firmware))
         .route("/api/engines/{id}/log", get(log_tail))
         .with_state(app.clone());
     let addr: SocketAddr = env("LE_LISTEN", "127.0.0.1:13500").parse().expect("LE_LISTEN");
@@ -946,6 +1226,41 @@ mod tests {
         let (app, e) = engine_with_preload();
         let m = app.preload_body(&e).unwrap_err();
         assert!(m.contains("LE_CAKE_BIN") && m.contains("not installed"), "{m}");
+    }
+
+    #[test]
+    fn new_entries_are_pinned_and_gated() {
+        let c: Catalog = toml::from_str(DEFAULT_CATALOG).unwrap();
+        let tl = c.engine.iter().find(|e| e.id == "ternlight").unwrap();
+        assert_eq!(tl.kind(), "embeddings");
+        for p in ["x86_64-linux", "x86_64-windows", "x86_64-macos", "aarch64-macos"] {
+            assert!(tl.files.iter().any(|f| f.platform.as_deref() == Some(p)), "ternlight has no build for {p}");
+        }
+        let mv = c.engine.iter().find(|e| e.id == "movidius").unwrap();
+        assert_eq!(mv.kind(), "vision");
+        assert_eq!(mv.group.as_deref(), Some("Bitter Lemons"));
+        assert!(mv.requires_usb.contains(&"03e7:2150".to_string()) && mv.requires_usb.contains(&"03e7:f63b".to_string()));
+        let fw = mv.firmware.as_ref().expect("movidius must gate Intel's firmware");
+        assert_eq!(fw.sha256, "df5261ab79697f3c564279010aebbc8fd171f57290a84f636201aee82368a3b2");
+        assert_eq!(fw.md5, "0f0eb9f1a529f2ef55c09d9fae72eb95");
+        assert!(mv.files.iter().all(|f| !f.source.contains("mvcmd") && !f.source.contains("NCSDK")), "Intel's firmware must not be a plain catalogue file");
+        assert!(mv.files.iter().all(|f| f.sha256.as_ref().map_or(false, |h| h.len() == 64)));
+        assert!(fw.plan_text("X").contains(&fw.md5) && fw.plan_text("X").contains(&fw.sha256));
+    }
+
+    #[test]
+    fn md5_and_cosine_are_right() {
+        let tmp = TempDir::new("md5");
+        std::fs::write(tmp.path().join("a"), b"abc").unwrap();
+        assert_eq!(md5_hex(&tmp.path().join("a")).unwrap(), "900150983cd24fb0d6963f7d28e17f72");
+        assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-12);
+        assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-12);
+        assert_eq!(cosine(&[0.0], &[1.0]), 0.0);
+    }
+
+    #[test]
+    fn missing_usb_device_is_reported_as_not_found() {
+        assert!(usb_found(&["ffff:ffff".to_string()]).is_empty());
     }
 
     #[test]
