@@ -7,6 +7,10 @@ Each engine runs as its own OpenAI-compatible server on `127.0.0.1` and joins Le
 provider, so its models show up in Lemonade's list and work in every app that talks to Lemonade.
 Lemonade itself is not modified.
 
+To build an engine *into* Lemonade as a native backend instead, see the companion repo
+[lemonade-engine-adapters](https://github.com/festeraeb/lemonade-engine-adapters): one JSON spec per engine,
+turned into a backend by `make-adapter`.
+
 ## Run
 
 ```sh
