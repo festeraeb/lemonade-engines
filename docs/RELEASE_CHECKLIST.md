@@ -1,3 +1,24 @@
+# Release notes: lemonade-engines v0.5.0
+
+New in v0.5.0: the signed online engine catalogue.
+- The Stand fetches `catalog/engines.toml` from this repository at start and every 6 hours, checks its ed25519
+  signature (`catalog/engines.toml.sig`) against the public key built into the program, and uses it only when it
+  verifies and its `version` is higher than the built-in one. Offline or on any failure it keeps the built-in list.
+  `LE_CATALOG` (a local file, unsigned) still overrides everything and turns the online check off.
+- Engines added by a newer catalogue show a **New** label with **Dismiss** on the page (`/api/state` `"new"`); a fresh
+  install shows none. `GET /api/catalog` says which catalogue is in use and whether it was verified.
+- `ENGINES.md` is generated from the catalogue (`--print-engines-md`); new catalogue fields `modified` and `tested`.
+- Publishing an engine: add it to `catalog/engines.toml`, raise `version`, sign with
+  `lemonade-engines --sign-catalog <key> catalog/engines.toml`, regenerate ENGINES.md, push. No new Stand release needed.
+  The private key lives outside the repository (operator's machine); only the public key is in `src/catalog.rs`.
+
+Checked before tagging (2026-11-08, t440): `cargo test` 21 pass; release build signed the published catalogue;
+a local signed version-2 catalogue with an extra engine was verified and used, the page showed New + Dismiss for
+that engine only (Playwright, Chrome), Dismiss cleared it. Not re-run for this release: the per-engine install e2e
+(`tests/e2e/setup.mjs`); the engine install code is unchanged apart from reading the catalogue through a lock.
+
+---
+
 # Release notes and checklist: lemonade-engines v0.4.0 (not tagged, not pushed)
 
 New in v0.4.0: the `ternlight` embeddings engine and the "Bitter Lemons" group with the `movidius` (Intel NCS1) engine.

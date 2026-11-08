@@ -14,7 +14,7 @@ use crate::Catalog;
 /// online catalogue off (the built-in one is used). The operator generates the real key with
 /// `lemonade-engines --gen-key PATH` (the private key must live outside this repo, never committed) and pastes the
 /// printed public key here before releasing.
-pub const CATALOG_PUBLIC_KEY_HEX: &str = "";
+pub const CATALOG_PUBLIC_KEY_HEX: &str = "ebc8cfd3b5550e425a16a3477d6e609313b407e92cda0154df7d834a879e08d7";
 
 pub const DEFAULT_CATALOG_URL: &str = "https://raw.githubusercontent.com/festeraeb/lemonade-engines/master/catalog/engines.toml";
 
