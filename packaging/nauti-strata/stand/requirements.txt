@@ -1,0 +1,5 @@
+# What serve/server.py and tools/strata_tokenizer.py need, pinned as Nauti-Strata's requirements.txt pins them.
+jinja2==3.1.6
+markupsafe==3.0.3
+regex==2026.9.10
+psutil==7.2.2
