@@ -9,7 +9,7 @@ param([Parameter(Mandatory)][int]$Port, [Parameter(Mandatory)][string]$Dir, [Par
 $ErrorActionPreference = "Stop"
 $repo = Join-Path $Dir $Src
 $src = Get-ChildItem $repo -Filter "strata-*.json" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (-not $src) { throw "no run config in $repo: run Set up again" }
+if (-not $src) { throw "no run config in ${repo}: run Set up again" }
 $cfg = Get-Content $src.FullName -Raw | ConvertFrom-Json
 $cfg | Add-Member -Force host "127.0.0.1"
 $cfg | Add-Member -Force port $Port
