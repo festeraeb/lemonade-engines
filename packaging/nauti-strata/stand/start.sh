@@ -3,6 +3,7 @@
 # Writes strata-stand.json (rewritten every start) and runs PolyStrata's server on 127.0.0.1:PORT.
 #   NAUTI_STRATA_GPU      card to use, numbered as nvidia-smi numbers them (default 0)
 #   NAUTI_STRATA_CONTEXT  context length (default 8192)
+#   NAUTI_STRATA_THINKING thinking level when a request names none: none (default), low, medium or high
 # NautiBurn routing scrapes are OFF by default.  They record each answer's token ids and routed experts.
 # To turn them on, write a folder path into DIR/nautiburn-scrape-dir (or set NAUTIBURN_SCRAPE_DIR);
 # delete the file to turn them off again.  Takes effect at the next start.
@@ -18,7 +19,7 @@ mkdir -p logs
 if [ ! -f pack/tokenizer/tokenizer.json ]; then        # first start: the tokenizer, read out of the GGUF
   venv/bin/python tools/strata_tokenizer.py --gguf "$MODEL_FILE" --out pack
 fi
-DIR="$DIR" EXE="$EXE" GPU="$GPU" CC="$CC" SCRAPE="$SCRAPE" PORT="$PORT" CTX="${NAUTI_STRATA_CONTEXT:-8192}" \
+DIR="$DIR" EXE="$EXE" GPU="$GPU" CC="$CC" SCRAPE="$SCRAPE" PORT="$PORT" CTX="${NAUTI_STRATA_CONTEXT:-8192}" THINK="${NAUTI_STRATA_THINKING:-none}" \
 MODEL_FILE="$MODEL_FILE" MODEL_NAME="$MODEL_NAME" MODEL_DISPLAY="$MODEL_DISPLAY" venv/bin/python - <<'PY'
 import json, os
 d = os.environ["DIR"]
@@ -36,7 +37,8 @@ cfg = {"exe": os.path.join(d, os.environ["EXE"]), "args": args, "cwd": d,
        "tokenizer": os.path.join(d, "pack", "tokenizer"), "model_name": os.environ["MODEL_NAME"],
        "display_name": os.environ["MODEL_DISPLAY"], "log": os.path.join(d, "logs", "engine.log"),
        "lib_dirs": [os.path.join(d, "lib")], "host": "127.0.0.1", "port": int(os.environ["PORT"]),
-       "gpu": [int(os.environ["GPU"])], "gpus_asked": True, "open_browser": False, "env": env}
+       "gpu": [int(os.environ["GPU"])], "gpus_asked": True, "open_browser": False, "env": env,
+       "reasoning_effort": os.environ["THINK"]}   # LFM2.5 thinks unless told not to; a request can still ask
 with open(os.path.join(d, "strata-stand.json"), "w") as f:
     json.dump(cfg, f, indent=2)
 print("NautiBurn scrapes:", ("ON -> " + env["NAUTIBURN_SCRAPE_DIR"]) if env else "off")
