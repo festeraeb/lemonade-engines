@@ -16,7 +16,7 @@
 
 # Published-catalogue header. `version` is an integer; a remote catalogue is used only when its version is
 # higher than the one in use. Bump it on every publish.
-version = 1
+version = 2
 published = "2026-11-08"
 
 [[engine]]
@@ -256,4 +256,33 @@ dest = "firmware/MvNCAPI-ma2450.mvcmd"
 source = "https://github.com/festeraeb/movidius-rust/releases/download/v0.3.0/movidius-rust-v0.3.0-linux-x86_64.tar.gz"
 dest = "movidius-rust-v0.3.0-linux-x86_64.tar.gz"
 sha256 = "067f6d27ab9619fa63d89e01979f01f00ec629d593547bc731c5e51207c2e69c"
+platform = "x86_64-linux"
+
+[[engine]]
+id = "nautistrata"
+name = "PolyStrata (Nauti-Strata)"
+summary = "Our PolyStrata build: runs mixture-of-experts models on one NVIDIA card by keeping the hot experts in video memory and the rest in RAM. Built for older cards too (Pascal: GTX 10-series, Tesla P100) and for CPUs without AVX2. Comes with LiquidAI's LFM2.5-24B-A2B."
+licence = "Engine: MIT (Nauti-Strata, a fork of Strata/PolyStrata). Model: LFM Open License v1.0 (Liquid AI), not an open-source licence. CUDA runtime libraries: NVIDIA redistributable (EULA included)."
+licence_url = "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-GGUF/blob/main/LICENSE"
+accept_licence = true
+tested = "Tested 2026-11-08 with Lemonade 2026.45.3 through the page. Linux: pass on Arch, GTX 1070 8 GB with a Xeon E5-2680 v2 (the AVX-only build), downloads from GitHub and Hugging Face: install 524 s, first test chat 28 tokens in 84.7 s cold on a busy machine (21.8 s on a second run); Stop pass. Windows: not offered yet (a Windows build is being tested)."
+modified = "Pascal (sm_60/61) kernel fixes, an AVX-only CPU build, GLM 5.3 and Mistral Large 4 support, expert tiers below VRAM, an optional NautiBurn routing scraper (off unless turned on)."
+hardware = "Linux x86-64 (glibc 2.39 or newer, so Ubuntu 24.04 or newer) with an NVIDIA card of 8 GB or more (GTX 10-series or newer) and a driver for CUDA 12; python3 3.10 or newer with venv; 24 GB RAM or more; 14 GB download"
+mode = "managed"
+port = 13470
+test_model = "lfm2.5-24b-a2b"
+exe = "stand/start.sh"
+args = ["{port}", "{dir}"]
+start_wait_s = 1800
+note = "Linux only for now. The first start reads the 13.6 GB model and fills the expert cache; that can take a few minutes. NautiBurn routing scrapes are off; to turn them on, write a folder path into nautiburn-scrape-dir in this engine's folder (delete the file to turn them off). NAUTI_STRATA_GPU picks the card (default 0)."
+[[engine.files]]
+source = "https://github.com/festeraeb/Nauti-Strata/releases/download/stand-0.1.44.1-9169af25/nauti-strata-0.1.44.1-9169af25-x86_64-linux-cuda12.tar.gz"
+dest = "nauti-strata-0.1.44.1-9169af25-x86_64-linux-cuda12.tar.gz"
+sha256 = "c6d61486a486a45ca15cbae6431502180941c828f4ee3ad07f34ef8949c88b2a"
+platform = "x86_64-linux"
+run = ["sh", "{dir}/stand/install.sh", "{dir}"]
+[[engine.files]]
+source = "https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-GGUF/resolve/main/LFM2.5-24B-A2B-QAD-Q4_0.gguf"
+dest = "LFM2.5-24B-A2B-QAD-Q4_0.gguf"
+sha256 = "d1c03f73ecaf61017d70419eec9e5dc0b05d50ae26c23d522829b934fbabf8a5"
 platform = "x86_64-linux"

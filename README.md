@@ -51,6 +51,15 @@ lemonade-engines --sign-catalog ~/.config/lemonade-engines/catalog-signing.key c
 lemonade-engines --print-engines-md catalog/engines.toml > ENGINES.md
 ```
 
+**Windows test catalogue.** `catalog/windows-test.toml` is the published catalogue plus Windows entries that are not
+published yet: PolyStrata mainline (simplexai-labs, its ready-made engine) and Nauti-Strata (compiled on the PC by its own
+setup). It is unsigned, so it is used only through `LE_CATALOG`:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -OutFile windows-test.toml https://raw.githubusercontent.com/festeraeb/lemonade-engines/master/catalog/windows-test.toml
+$env:LE_CATALOG = "$PWD\windows-test.toml"; .\lemonade-engines.exe
+```
+
 Commit `catalog/engines.toml`, its `.sig` and `ENGINES.md` together (a test fails if `ENGINES.md` is stale). Keep
 `assets/engines.toml` (the built-in copy) in step at each Stand release.
 
@@ -69,6 +78,7 @@ builds them from each tag. Unpack and run `lemonade-engines`. The page then open
 | Ternary Bonsai 8B (GPU / CPU) | Downloads PrismML's llama.cpp build for this computer (.tar.gz or .zip) and the ternary Bonsai 8B model (both sha256 pinned), starts it, adds it to Lemonade, asks a test question | Linux, Windows |
 | Iced lemon cake | Downloads a Lemonade 2026.43.3 server with the Cake and lemonade-burn backends (see `packaging/iced-lemcake`), starts it on 127.0.0.1:13410, loads a small test model, adds it to Lemonade, asks a test question | Linux x86-64, Windows x86-64 |
 | ternlight | Downloads the ternlight-server release for this computer (sha256 pinned; the model is inside the program), starts it, adds it to Lemonade, asks for the embeddings of three sentences and shows their size, the time and how close the related pair is | Linux, Windows, macOS |
+| PolyStrata (Nauti-Strata) | Downloads our PolyStrata build (two engines, AVX2 and AVX-only, CUDA 12.8 runtime bundled; see `packaging/nauti-strata`) and LiquidAI's LFM2.5-24B-A2B (both sha256 pinned, licence accepted first), makes a Python venv, starts PolyStrata's server, adds it to Lemonade, asks a test question. NautiBurn routing scrapes are off unless `nautiburn-scrape-dir` in the engine folder names a folder | Linux x86-64, NVIDIA 8 GB (Pascal or newer) |
 | Cake | Attaches to the Iced lemon cake server, registers a Cake model and adds it to Lemonade. Cake's program is not bundled (FAIR licence): put it at `bin/cake` in the engine folder, on PATH, or set `LE_CAKE_BIN` | Where Cake builds |
 
 ### Bitter Lemons
@@ -119,6 +129,12 @@ Added for v0.4.0, tested 2026-10-31 (throwaway Lemonade 2026.43.3 on port 13705,
 |---|---|---|
 | ternlight | pass, t440 (3 sentences, 384 dimensions, 147 ms; related pair 0.701 against 0.025 negative for the unrelated one; Lemonade itself refuses embeddings, see above) | pass, Windows 11 nautik9 (60 ms; release asset copied by file:// because that machine could not reach github.com at the time, sha256 still checked) |
 | Movidius NCS1 | pass on cesarops4om with a real stick: stick found, firmware downloaded from the Internet Archive with both checksums matching, server started, graph listed with `generates_text: false`, chat 501 by design. No inference was run through the page. On t440 (no stick): "No stick found" shown, expected-failure pass | not offered (Linux only) |
+
+Added 2026-11-08 (Lemonade 2026.45.3 on cesarops1, through the page with `tests/e2e/setup.mjs`):
+
+| Engine | Linux | Windows |
+|---|---|---|
+| PolyStrata (Nauti-Strata) | pass, cesarops1 (Arch, GTX 1070 8 GB, Xeon E5-2680 v2 so the AVX-only build): install from GitHub and Hugging Face 524 s, test chat 28 tokens in 84.7 s cold on a busy machine (21.8 s on a second run), Stop pass | not offered yet: a Windows test catalogue is in `catalog/windows-test.toml` (see below) |
 
 Not run, and why:
 - Strata Download, Start, Stop: needs 12 GB or more of free video memory and a 90 GB download; no GPU on the checked nodes (t440, c2, c3, c4) had 12 GB free without displacing a running seat.
