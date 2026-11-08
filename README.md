@@ -26,9 +26,33 @@ each step. The individual steps are still available under "Individual steps".
 |---|---|---|
 | `LEMONADE_HOST`, `LEMONADE_PORT` | `127.0.0.1`, `13305` | Your Lemonade server |
 | `LE_LISTEN` | `127.0.0.1:13500` | Address of this page |
-| `LE_CATALOG` | built-in `assets/engines.toml` | Engine catalogue (TOML) |
+| `LE_CATALOG` | unset | A local catalogue file (TOML, unsigned); overrides the built-in and the online one. For local testing |
+| `LE_CATALOG_URL` | `https://raw.githubusercontent.com/festeraeb/lemonade-engines/master/catalog/engines.toml` | Signed online catalogue (`.sig` next to it); see "Online catalogue" |
 | `LE_HOME` | `~/.local/share/lemonade-engines` | Where engines are installed |
 | `LE_NO_BROWSER` | unset | Set to skip opening the browser |
+
+## Online catalogue
+
+Releasing a new engine means publishing a catalogue update. On start and every 6 hours the Stand fetches
+`catalog/engines.toml` and `catalog/engines.toml.sig` from `LE_CATALOG_URL`, checks the ed25519 signature against the
+public key compiled in (`CATALOG_PUBLIC_KEY_HEX` in `src/catalog.rs`) and uses the catalogue only if it is valid and its
+`version` is higher than the one in use. Otherwise (offline, bad signature, not newer) the built-in catalogue stays; nothing
+from an unverified catalogue is parsed into use, downloaded or run. `GET /api/catalog` says which one is active. Engines the
+user has not seen before get a "New" label (ids seen are kept in `LE_HOME/seen-engines.json`; Set up or Dismiss clears it;
+a fresh install shows none).
+
+The public key is a placeholder until the operator sets it, which keeps the online catalogue off. To publish (the private
+key must live outside the repo, e.g. `~/.config/lemonade-engines/catalog-signing.key`, mode 0600, never committed):
+
+```sh
+lemonade-engines --gen-key ~/.config/lemonade-engines/catalog-signing.key   # once; prints the public key for src/catalog.rs
+# edit catalog/engines.toml, raise `version`, set `published`, then:
+lemonade-engines --sign-catalog ~/.config/lemonade-engines/catalog-signing.key catalog/engines.toml   # writes catalog/engines.toml.sig
+lemonade-engines --print-engines-md catalog/engines.toml > ENGINES.md
+```
+
+Commit `catalog/engines.toml`, its `.sig` and `ENGINES.md` together (a test fails if `ENGINES.md` is stale). Keep
+`assets/engines.toml` (the built-in copy) in step at each Stand release.
 
 ## Download
 
@@ -58,6 +82,8 @@ Vision hardware, listed under its own heading on the page.
 It needs a compiled NCSDK v1 graph that you supply: set `LE_MOVIDIUS_GRAPH` to its path before pressing Set up. The program resets the stick itself between graphs; do not unplug it while it runs.
 
 Embeddings and vision engines do not chat, so their test differs. ternlight is asked for `/v1/embeddings` directly, and the page then tries the same request through Lemonade and reports what Lemonade does: Lemonade 2026.43.3 lists a cloud provider's models as chat models and answers `/v1/embeddings` for them with "Embeddings not supported", so apps should use the engine's address (`http://127.0.0.1:13443/v1`).
+
+The engine list with licence, needs, what we modified and where each was tested is in [ENGINES.md](ENGINES.md) (generated from the catalogue).
 
 ## Tests
 

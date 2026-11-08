@@ -46,6 +46,7 @@ h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; text-wrap: bal
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--chip); color: var(--muted); border: 1px solid var(--line); }
 .chip.on { color: var(--ok); border-color: currentColor; }
+.chip.new { color: var(--accent-ink); background: var(--ok); border-color: var(--ok); font-weight: 600; }
 .chip.warn { color: var(--warn); border-color: currentColor; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 button { font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); color: var(--ink); cursor: pointer; }
@@ -103,6 +104,7 @@ async function post(id, act, body) {
 async function setup(id, accept, acceptPlan) {
   const x = lastState.engines.find(v => v.engine.id === id); if (!x) return;
   const e = x.engine, steps = [];
+  if (x.new) post(id, "seen"); // pressing Set up counts as having seen it
   const needFw = e.firmware && !x.firmware_present;
   if (e.requires_usb && e.requires_usb.length) steps.push("usb");
   // Attach engines have nothing to install, but a licence-gated one records the acceptance in this step.
@@ -197,6 +199,7 @@ function render(s) {
     const e = x.engine, id = e.id, b = busy[id];
     const needAccept = e.accept_licence && !x.accepted;
     const chips = [
+      x.new ? `<span class="chip new">New</span> <button data-act="seen" data-id="${id}" title="Hide the New label">Dismiss</button>` : "",
       e.mode === "attach" ? `<span class="chip">runs as its own server</span>` : `<span class="chip ${x.installed ? "on" : ""}">${x.installed ? "installed" : "not installed"}</span>`,
       `<span class="chip ${x.up ? "on" : ""}">${x.up ? "server answering" : "server not running"}</span>`,
       `<span class="chip ${x.registered ? "on" : ""}">${x.registered ? `in Lemonade: ${x.models.length} model(s)` : "not in Lemonade"}</span>`,
@@ -240,6 +243,7 @@ function render(s) {
 document.addEventListener("click", ev => {
   const btn = ev.target.closest("button[data-act]"); if (!btn || btn.disabled) return;
   if (btn.dataset.act === "setup") setup(btn.dataset.id, !!btn.dataset.accept, !!btn.dataset.plan);
+  else if (btn.dataset.act === "seen") post(btn.dataset.id, "seen").then(() => refresh(true));
   else call(btn.dataset.id, btn.dataset.act, btn.dataset.accept ? {accept_licence: true} : undefined);
 });
 

@@ -1,0 +1,259 @@
+# Engine catalogue for lemonade-engines.
+#
+# Each engine runs as its own OpenAI-compatible server on 127.0.0.1 and is registered with the
+# user's Lemonade as a provider (`lemonade cloud install <id> --base-url http://127.0.0.1:<port>/v1`),
+# so its models appear in Lemonade as `<id>.<model>`. Lemonade itself is not modified.
+#
+# mode = "managed": lemonade-engines installs the files and starts the server.
+# mode = "attach":  the server already runs at `url`; lemonade-engines only registers it.
+#
+# Optional per-engine text shown in ENGINES.md (taken from the README Status tables, never invented):
+#   modified = "<what we changed>"   tested = "<where and what passed>"
+#
+# Placeholders in args: {port}, {dir} (this engine's install folder).
+# Sources: https://... (downloaded; sha256 checked when given) or file:///... (copied; a folder is copied whole).
+# A source ending in .tar.gz is unpacked into the install folder.
+
+# Published-catalogue header. `version` is an integer; a remote catalogue is used only when its version is
+# higher than the one in use. Bump it on every publish.
+version = 1
+published = "2026-11-08"
+
+[[engine]]
+id = "burn"
+name = "lemonade-burn"
+summary = "Microsoft BitNet b1.58 2B4T with a packed 2-bit ternary kernel. Runs on the CPU; no GPU needed."
+licence = "MIT OR Apache-2.0 (BitNet weights: MIT)"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (22 tokens, 2.2 to 2.8 s). Windows: pass (22 tokens, 2.0 s idle)."
+hardware = "Linux x86-64 (glibc 2.30 or newer), Windows x86-64 or macOS (Intel or Apple silicon); about 2 GB RAM; 0.9 GB download. Fastest on x86-64 with AVX2 or AVX-512; Apple silicon uses the plain kernel."
+mode = "managed"
+port = 13431
+test_model = "bitnet-b1.58-2B-4T"
+args = ["--host", "127.0.0.1", "--port", "{port}", "--model", "{dir}/bitnet-b1.58-2B-4T-lbt", "--model-id", "bitnet-b1.58-2B-4T"]
+exe = "lemonade-burn-server"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-linux.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-linux.tar.gz"
+sha256 = "3b97e6b573716bb312a2cb601fa6cb35543384f2c11c234c826dc9fda05b7145"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-windows.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-windows.tar.gz"
+sha256 = "d3ead93d40b42bc00096b71d54d9a24d3d169ffcc04a663cec286115696189ed"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-x86_64-macos.tar.gz"
+dest = "lemonade-burn-server-0.1.1-x86_64-macos.tar.gz"
+sha256 = "0a922b1d275ad0ef3cc8161e46fe7a04906061cc633660973665a154396495e5"
+platform = "x86_64-macos"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.1/lemonade-burn-server-0.1.1-aarch64-macos.tar.gz"
+dest = "lemonade-burn-server-0.1.1-aarch64-macos.tar.gz"
+sha256 = "12a9f6533eed4139f226ebe7578744a6bce28e7d52c4edcc25b819eb4ff607d7"
+platform = "aarch64-macos"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-burn/releases/download/v0.1.0/bitnet-b1.58-2B-4T-lbt.tar.gz"
+dest = "bitnet-b1.58-2B-4T-lbt.tar.gz"
+sha256 = "2e869bf83ef7d215de6377dcc2f8468083568fba70016a4ec24cc1acca39dc86"
+
+[[engine]]
+id = "icedlemcake"
+name = "Iced lemon cake (extended Lemonade server)"
+summary = "A Lemonade 2026.43.3 server with two extra backends, Cake and lemonade-burn, next to the usual llama.cpp ones. Runs on its own port and is registered with your Lemonade as one provider."
+licence = "Lemonade (Apache-2.0) with added backends (MIT OR Apache-2.0)"
+modified = "Lemonade 2026.43.3 server with the Cake and lemonade-burn backends added."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (LFM2-1.2B, 24 to 29 tokens). Windows: pass (LFM2-1.2B, 24 tokens, 0.7 s)."
+hardware = "Linux x86-64 (glibc 2.38 or newer, so Ubuntu 24.04 or newer) or Windows x86-64; about 60 MB, plus the 0.7 GB test model and a llama.cpp build that its Lemonade downloads on first use. Uses a Vulkan GPU when there is one, else the CPU."
+mode = "managed"
+port = 13410
+test_model = "LFM2-1.2B-GGUF"
+exe = "lemond"
+args = ["--host", "127.0.0.1", "--port", "{port}", "--no-broadcast", "--log-file", "disabled", "{dir}/cache", "{dir}/config"]
+note = "Setting it up downloads a small test model and the llama.cpp build it runs on; that can take a few minutes."
+# Loaded on the engine first: a request routed through your Lemonade cannot carry load options, and this also fetches the test model.
+preload = { model_name = "LFM2-1.2B-GGUF" }
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-engines/releases/download/v0.3.0/iced-lemcake-2026.43.3-x86_64-linux.tar.gz"
+dest = "iced-lemcake-2026.43.3-x86_64-linux.tar.gz"
+sha256 = "67e4b72f4de89e5254140c060ba09a7ad24efae0f9a15cb8afd2d63db43ead74"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/festeraeb/lemonade-engines/releases/download/v0.3.0/iced-lemcake-2026.43.3-x86_64-windows.tar.gz"
+dest = "iced-lemcake-2026.43.3-x86_64-windows.tar.gz"
+sha256 = "a9e5b6d6aaa88329e98ac2f67e166679caa8141778ac72122e46af6387d241a0"
+platform = "x86_64-windows"
+
+[[engine]]
+id = "strata"
+name = "Strata"
+summary = "Runs large mixture-of-experts models on one gaming GPU by streaming experts. Installed with Strata's own signed installer; Strata picks the engine for your graphics card and a model for your RAM."
+licence = "MIT"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3. Linux: installer and plan pass on t440 (84 GB model, 89.7 GB download); Download, Start and Stop not run. Windows: not offered by the catalogue; the test machine's GPU is 4 GB, Strata needs 12 GB."
+hardware = "Linux x86-64 with an NVIDIA or AMD GPU (12 GB or more), or a Mac with Apple silicon; 32 GB RAM or more; the model download is often 30 to 90 GB"
+mode = "managed"
+port = 13450
+exe = "data/terminal/current/bin/strata"
+args = ["launch", "--yes", "--no-tui", "--access", "local", "--port", "{port}", "--data-dir", "{dir}/models", "--save-preset", "lemonade-engines"]
+plan_args = ["launch", "--yes", "--no-tui", "--access", "local", "--port", "{port}", "--data-dir", "{dir}/models", "--save-preset", "lemonade-engines", "--plan"]
+stop_args = ["runtime", "stop", "--profile", "lemonade-engines"]
+start_wait_s = 172800
+note = "Before the first start the page shows what Strata will download (model, draft layer, picture reader and the engine for your card) and asks you to accept it. The download can take hours; progress is shown under the step. On Windows, use Strata's own installer for now."
+# Strata's own installer from its v0.2.3.1 release (sha256 from the release's SHA256SUMS.txt). It checks the
+# download's checksum and the release's signature and installs into this engine's folder.
+env = { STRATA_FEED = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1", STRATA_DATA_DIR = "{dir}/data", STRATA_BIN_DIR = "{dir}/bin" }
+[[engine.files]]
+source = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1/install.sh"
+dest = "install.sh"
+sha256 = "73a3e0cbd8f2f00e1f26a304c1f8f498afdf9be3a4a9f58c83fa5ffdb6642780"
+platform = "x86_64-linux"
+run = ["sh", "{dir}/install.sh"]
+[[engine.files]]
+source = "https://github.com/Niko1221/Strata/releases/download/v0.2.3.1/install.sh"
+dest = "install.sh"
+sha256 = "73a3e0cbd8f2f00e1f26a304c1f8f498afdf9be3a4a9f58c83fa5ffdb6642780"
+platform = "aarch64-macos"
+run = ["sh", "{dir}/install.sh"]
+
+[[engine]]
+id = "cake"
+name = "Cake"
+summary = "Distributed, layer-sharded inference across several machines. Offloads only some operations to the GPU, so it is a distribution path, not a speed path."
+licence = "FAIR License (Free Access for Individuals and Researchers): non-commercial use only"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3. Linux: pass, c4 (Cake 0.1.0 built locally; 23 tokens, 10.2 s, 2.3 tok/s). Windows: not run, no Windows Cake program."
+licence_url = "https://github.com/evilsocket/cake/blob/main/LICENSE.md"
+accept_licence = true
+hardware = "Any; Vulkan or Metal GPU optional"
+mode = "attach"
+url = "http://127.0.0.1:13410"
+test_model = "Qwen2.5-Coder-1.5B-Cake"
+exe = "bin/cake"
+note = "Needs two things that are not bundled: the extended Lemonade server (set up the Iced lemon cake entry first, it listens on 127.0.0.1:13410) and Cake's own program. Cake has no binary releases, so build it from its source and put it at bin/cake inside this engine's folder, or on PATH, or set LE_CAKE_BIN to its full path. Its model weights (3 GB) are downloaded by Cake on the first start."
+# Cake needs its port and launch command at load time, which a request routed through Lemonade cannot carry.
+# {bin} is the Cake program found as described above; {model}, {port} and {worker_port} are filled in by the engine.
+pull = { model_name = "user.Qwen2.5-Coder-1.5B-Cake", checkpoint = "Qwen/Qwen2.5-Coder-1.5B-Instruct", recipe = "cake" }
+preload = { model_name = "user.Qwen2.5-Coder-1.5B-Cake", cake_port = 18492, cake_args = "\"{bin}\" serve {model} --api 127.0.0.1:{port} --address 127.0.0.1:{worker_port} --dtype f16 --temperature 0" }
+
+[[engine]]
+id = "bonsai"
+name = "Ternary Bonsai 8B (GPU)"
+summary = "PrismML's ternary Qwen3-8B (2.18 GB) on PrismML's llama.cpp build, every layer on the GPU through Vulkan (AMD, NVIDIA or Intel). Measured 13 tok/s on a 2016 Radeon Pro WX 5100."
+licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 (Tesla P100, Vulkan) and c4 (GTX 1070, Vulkan). Windows: pass on the Quadro M2200 through Vulkan (18 tokens, 2.2 s; llama.cpp logged 13.4 tok/s generation)."
+hardware = "Linux or Windows x86-64 with a Vulkan GPU and 3 GB of free video memory; 2.2 GB model download. On a machine with several GPUs set GGML_VK_VISIBLE_DEVICES to the one to use."
+mode = "managed"
+port = 13441
+test_model = "ternary-bonsai-8b"
+exe = "llama-prism-b10822-bf8c069/llama-server"
+exe_platform = { "x86_64-windows" = "llama-server.exe" }
+args = ["-m", "{dir}/Ternary-Bonsai-8B-PQ2_0.gguf", "--host", "127.0.0.1", "--port", "{port}", "-ngl", "99", "-c", "8192", "--alias", "ternary-bonsai-8b"]
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-ubuntu-vulkan-x64.tar.gz"
+dest = "llama-prism-b10822-bf8c069-bin-ubuntu-vulkan-x64.tar.gz"
+sha256 = "68d04743a53e35c7e22b8e05383d971ca0ea3bf944ea792ba47c17cc41b3c10f"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-win-vulkan-x64.zip"
+dest = "llama-prism-b10822-bf8c069-bin-win-vulkan-x64.zip"
+sha256 = "6fd7f45eafdb9dcc2ebf7e23df24d71fcd16c60fdc8c985682fbc48edd46a7ab"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/main/Ternary-Bonsai-8B-PQ2_0.gguf"
+dest = "Ternary-Bonsai-8B-PQ2_0.gguf"
+sha256 = "1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922"
+
+[[engine]]
+id = "bonsaicpu"
+name = "Ternary Bonsai 8B (CPU only)"
+summary = "The same ternary Qwen3-8B on the CPU, no GPU needed. Measured 4.8 tok/s on a 4-core 2013 Xeon E3."
+licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (18 tokens, 1.7 to 12 s depending on load). Windows: pass (18 tokens, 6.6 s idle)."
+hardware = "Linux or Windows x86-64, about 3 GB RAM; 2.2 GB model download."
+mode = "managed"
+port = 13442
+test_model = "ternary-bonsai-8b"
+exe = "llama-prism-b10822-bf8c069/llama-server"
+exe_platform = { "x86_64-windows" = "llama-server.exe" }
+args = ["-m", "{dir}/Ternary-Bonsai-8B-PQ2_0.gguf", "--host", "127.0.0.1", "--port", "{port}", "-dev", "none", "-ngl", "0", "-c", "8192", "--alias", "ternary-bonsai-8b"]
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-ubuntu-x64.tar.gz"
+dest = "llama-prism-b10822-bf8c069-bin-ubuntu-x64.tar.gz"
+sha256 = "c1bcad295ca60f4a02d28129f00f6738a6803b0d5ea4443295a9f5a579de7629"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10822-bf8c069/llama-prism-b10822-bf8c069-bin-win-cpu-x64.zip"
+dest = "llama-prism-b10822-bf8c069-bin-win-cpu-x64.zip"
+sha256 = "bb54656f9c83fd64000790bce48b3dfa031af95090c61b666e28c699105a4354"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://huggingface.co/prism-ml/Ternary-Bonsai-8B-gguf/resolve/main/Ternary-Bonsai-8B-PQ2_0.gguf"
+dest = "Ternary-Bonsai-8B-PQ2_0.gguf"
+sha256 = "1376f942aa90e60f7b570c1d81b3916fea1315ff85aa1c4d19006af68fb4b922"
+
+[[engine]]
+id = "ternlight"
+name = "ternlight (ternary sentence embeddings)"
+summary = "A 384-dimension sentence-embedding model with ternary weights, served at /v1/embeddings. Runs on the CPU, about 5 MB, nothing else to download. Lemonade then lists it as an embeddings provider."
+licence = "Server: Apache-2.0. Engine and model: MIT (Wenshu Tang, github.com/soycaporal/ternlight)"
+tested = "Tested 2026-10-31 (throwaway Lemonade 2026.43.3, CPU only). Linux: pass, t440 (3 sentences, 384 dimensions, 147 ms; related pair 0.701 against 0.025 for the unrelated one). Windows: pass, Windows 11 nautik9 (60 ms; release asset copied by file://, sha256 still checked). Lemonade itself refuses embeddings."
+hardware = "Linux x86-64 (glibc 2.31 or newer), Windows x86-64 or macOS (Intel or Apple silicon); no GPU; a few hundred MB of RAM; a 4 MB download."
+kind = "embeddings"
+mode = "managed"
+port = 13443
+test_model = "ternlight-base"
+exe = "ternlight-server"
+args = ["--host", "127.0.0.1", "--port", "{port}"]
+note = "This is an embeddings model, not a chat model: the test asks the engine for the vectors of three sentences and shows their size, the time, and whether the two sentences about the same thing sit closer together than the unrelated one. It then tries the same request through Lemonade and says what happened: Lemonade 2026.43.3 lists the provider but does not forward embeddings requests to cloud providers, so apps should use the address shown."
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-linux.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-linux.tar.gz"
+sha256 = "533462b0fd82f38a8c07510b2caad2e93f1620f2a636764436b2c916d7f882e0"
+platform = "x86_64-linux"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-windows.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-windows.tar.gz"
+sha256 = "8b11e63c042cd0be0736dac8376262d86c66942b14dbac760f0fd9b6d7edbe45"
+platform = "x86_64-windows"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-x86_64-macos.tar.gz"
+dest = "ternlight-server-0.1.1-x86_64-macos.tar.gz"
+sha256 = "fa74bfa98ceb8d2555eadefdaf964739180c8072508a773644568a50025adf14"
+platform = "x86_64-macos"
+[[engine.files]]
+source = "https://github.com/festeraeb/ternlight-server/releases/download/v0.1.1/ternlight-server-0.1.1-aarch64-macos.tar.gz"
+dest = "ternlight-server-0.1.1-aarch64-macos.tar.gz"
+sha256 = "9725f5a1f6efbaed57c0bbd47650c67cf257aa8e38818eb5def7b7162c3adf6a"
+platform = "aarch64-macos"
+
+[[engine]]
+id = "movidius"
+name = "Movidius NCS1 vision graph (movidius-rust)"
+group = "Bitter Lemons"
+group_note = "Bitter Lemons: vision hardware on the Lemonade stand. These engines see; they do not chat."
+summary = "Runs a compiled vision network on an Intel Movidius Neural Compute Stick 1 through a pure-Rust host (no OpenVINO). Lemonade lists the graph as a model that does not generate text; real inference is POST /v1/infer on the engine. Chat answers HTTP 501 on purpose."
+licence = "movidius-rust: Apache-2.0. Intel's firmware is separate, is not included, and is downloaded only after you accept it."
+tested = "Tested 2026-10-31. Linux: pass on cesarops4om with a real stick (stick found, firmware downloaded with both checksums matching, server started, graph listed with generates_text: false, chat 501 by design; no inference was run through the page). On t440 (no stick): No stick found shown, expected-failure pass. Windows: not offered."
+licence_url = "https://github.com/festeraeb/movidius-rust"
+hardware = "Linux x86-64 and an Intel NCS1 USB stick (USB id 03e7:2150 or 03e7:f63b). Needs a compiled NCSDK v1 .graph file (see the note)."
+kind = "vision"
+mode = "managed"
+port = 13460
+exe = "movidius-rust-v0.3.0-linux-x86_64/movidius-rust"
+args = ["serve", "--model", "models/model.graph", "--host", "127.0.0.1", "--port", "{port}", "--firmware", "{dir}/firmware/MvNCAPI-ma2450.mvcmd"]
+requires_usb = ["03e7:2150", "03e7:f63b"]
+note = "The stick must be plugged in; Set up says plainly when it is not. The program needs a compiled graph that you provide: set LE_MOVIDIUS_GRAPH to its path (a SqueezeNet v1.1 graph works; tools/ncs1-compile in the movidius-rust repository builds one). Reset rule: the stick must be reset after a graph has run and before another is loaded; the program does this itself. Do not unplug it while running."
+[engine.user_file]
+dest = "models/model.graph"
+env = "LE_MOVIDIUS_GRAPH"
+help = "Movidius needs a compiled NCSDK v1 graph. Set LE_MOVIDIUS_GRAPH to its path and press Set up again."
+[engine.firmware]
+description = "Intel's NCSDK 1.12.01.01 device firmware (MvNCAPI.mvcmd), (c) Intel. Intel's own download address now answers 403, so this is the Internet Archive snapshot of it. Intel's licence is not ours to grant: read it in the NCSDK archive before you accept."
+source = "https://web.archive.org/web/20191119142208id_/https://downloadmirror.intel.com/28192/eng/NCSDK-1.12.01.01.tar.gz"
+sha256 = "df5261ab79697f3c564279010aebbc8fd171f57290a84f636201aee82368a3b2"
+member = "NCSDK-1.12.01.01/ncsdk-x86_64/fw/MvNCAPI.mvcmd"
+md5 = "0f0eb9f1a529f2ef55c09d9fae72eb95"
+dest = "firmware/MvNCAPI-ma2450.mvcmd"
+[[engine.files]]
+source = "https://github.com/festeraeb/movidius-rust/releases/download/v0.3.0/movidius-rust-v0.3.0-linux-x86_64.tar.gz"
+dest = "movidius-rust-v0.3.0-linux-x86_64.tar.gz"
+sha256 = "067f6d27ab9619fa63d89e01979f01f00ec629d593547bc731c5e51207c2e69c"
+platform = "x86_64-linux"

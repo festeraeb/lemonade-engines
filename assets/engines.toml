@@ -7,15 +7,24 @@
 # mode = "managed": lemonade-engines installs the files and starts the server.
 # mode = "attach":  the server already runs at `url`; lemonade-engines only registers it.
 #
+# Optional per-engine text shown in ENGINES.md (taken from the README Status tables, never invented):
+#   modified = "<what we changed>"   tested = "<where and what passed>"
+#
 # Placeholders in args: {port}, {dir} (this engine's install folder).
 # Sources: https://... (downloaded; sha256 checked when given) or file:///... (copied; a folder is copied whole).
 # A source ending in .tar.gz is unpacked into the install folder.
+
+# Published-catalogue header. `version` is an integer; a remote catalogue is used only when its version is
+# higher than the one in use. Bump it on every publish.
+version = 1
+published = "2026-11-08"
 
 [[engine]]
 id = "burn"
 name = "lemonade-burn"
 summary = "Microsoft BitNet b1.58 2B4T with a packed 2-bit ternary kernel. Runs on the CPU; no GPU needed."
 licence = "MIT OR Apache-2.0 (BitNet weights: MIT)"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (22 tokens, 2.2 to 2.8 s). Windows: pass (22 tokens, 2.0 s idle)."
 hardware = "Linux x86-64 (glibc 2.30 or newer), Windows x86-64 or macOS (Intel or Apple silicon); about 2 GB RAM; 0.9 GB download. Fastest on x86-64 with AVX2 or AVX-512; Apple silicon uses the plain kernel."
 mode = "managed"
 port = 13431
@@ -52,6 +61,8 @@ id = "icedlemcake"
 name = "Iced lemon cake (extended Lemonade server)"
 summary = "A Lemonade 2026.43.3 server with two extra backends, Cake and lemonade-burn, next to the usual llama.cpp ones. Runs on its own port and is registered with your Lemonade as one provider."
 licence = "Lemonade (Apache-2.0) with added backends (MIT OR Apache-2.0)"
+modified = "Lemonade 2026.43.3 server with the Cake and lemonade-burn backends added."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (LFM2-1.2B, 24 to 29 tokens). Windows: pass (LFM2-1.2B, 24 tokens, 0.7 s)."
 hardware = "Linux x86-64 (glibc 2.38 or newer, so Ubuntu 24.04 or newer) or Windows x86-64; about 60 MB, plus the 0.7 GB test model and a llama.cpp build that its Lemonade downloads on first use. Uses a Vulkan GPU when there is one, else the CPU."
 mode = "managed"
 port = 13410
@@ -77,6 +88,7 @@ id = "strata"
 name = "Strata"
 summary = "Runs large mixture-of-experts models on one gaming GPU by streaming experts. Installed with Strata's own signed installer; Strata picks the engine for your graphics card and a model for your RAM."
 licence = "MIT"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3. Linux: installer and plan pass on t440 (84 GB model, 89.7 GB download); Download, Start and Stop not run. Windows: not offered by the catalogue; the test machine's GPU is 4 GB, Strata needs 12 GB."
 hardware = "Linux x86-64 with an NVIDIA or AMD GPU (12 GB or more), or a Mac with Apple silicon; 32 GB RAM or more; the model download is often 30 to 90 GB"
 mode = "managed"
 port = 13450
@@ -107,6 +119,7 @@ id = "cake"
 name = "Cake"
 summary = "Distributed, layer-sharded inference across several machines. Offloads only some operations to the GPU, so it is a distribution path, not a speed path."
 licence = "FAIR License (Free Access for Individuals and Researchers): non-commercial use only"
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3. Linux: pass, c4 (Cake 0.1.0 built locally; 23 tokens, 10.2 s, 2.3 tok/s). Windows: not run, no Windows Cake program."
 licence_url = "https://github.com/evilsocket/cake/blob/main/LICENSE.md"
 accept_licence = true
 hardware = "Any; Vulkan or Metal GPU optional"
@@ -125,6 +138,7 @@ id = "bonsai"
 name = "Ternary Bonsai 8B (GPU)"
 summary = "PrismML's ternary Qwen3-8B (2.18 GB) on PrismML's llama.cpp build, every layer on the GPU through Vulkan (AMD, NVIDIA or Intel). Measured 13 tok/s on a 2016 Radeon Pro WX 5100."
 licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 (Tesla P100, Vulkan) and c4 (GTX 1070, Vulkan). Windows: pass on the Quadro M2200 through Vulkan (18 tokens, 2.2 s; llama.cpp logged 13.4 tok/s generation)."
 hardware = "Linux or Windows x86-64 with a Vulkan GPU and 3 GB of free video memory; 2.2 GB model download. On a machine with several GPUs set GGML_VK_VISIBLE_DEVICES to the one to use."
 mode = "managed"
 port = 13441
@@ -152,6 +166,7 @@ id = "bonsaicpu"
 name = "Ternary Bonsai 8B (CPU only)"
 summary = "The same ternary Qwen3-8B on the CPU, no GPU needed. Measured 4.8 tok/s on a 4-core 2013 Xeon E3."
 licence = "Model: Apache-2.0 (PrismML). llama.cpp build: MIT."
+tested = "Tested 2026-10-28 with Lemonade 2026.43.3 through the page. Linux: pass, t440 and c4 (18 tokens, 1.7 to 12 s depending on load). Windows: pass (18 tokens, 6.6 s idle)."
 hardware = "Linux or Windows x86-64, about 3 GB RAM; 2.2 GB model download."
 mode = "managed"
 port = 13442
@@ -179,6 +194,7 @@ id = "ternlight"
 name = "ternlight (ternary sentence embeddings)"
 summary = "A 384-dimension sentence-embedding model with ternary weights, served at /v1/embeddings. Runs on the CPU, about 5 MB, nothing else to download. Lemonade then lists it as an embeddings provider."
 licence = "Server: Apache-2.0. Engine and model: MIT (Wenshu Tang, github.com/soycaporal/ternlight)"
+tested = "Tested 2026-10-31 (throwaway Lemonade 2026.43.3, CPU only). Linux: pass, t440 (3 sentences, 384 dimensions, 147 ms; related pair 0.701 against 0.025 for the unrelated one). Windows: pass, Windows 11 nautik9 (60 ms; release asset copied by file://, sha256 still checked). Lemonade itself refuses embeddings."
 hardware = "Linux x86-64 (glibc 2.31 or newer), Windows x86-64 or macOS (Intel or Apple silicon); no GPU; a few hundred MB of RAM; a 4 MB download."
 kind = "embeddings"
 mode = "managed"
@@ -215,6 +231,7 @@ group = "Bitter Lemons"
 group_note = "Bitter Lemons: vision hardware on the Lemonade stand. These engines see; they do not chat."
 summary = "Runs a compiled vision network on an Intel Movidius Neural Compute Stick 1 through a pure-Rust host (no OpenVINO). Lemonade lists the graph as a model that does not generate text; real inference is POST /v1/infer on the engine. Chat answers HTTP 501 on purpose."
 licence = "movidius-rust: Apache-2.0. Intel's firmware is separate, is not included, and is downloaded only after you accept it."
+tested = "Tested 2026-10-31. Linux: pass on cesarops4om with a real stick (stick found, firmware downloaded with both checksums matching, server started, graph listed with generates_text: false, chat 501 by design; no inference was run through the page). On t440 (no stick): No stick found shown, expected-failure pass. Windows: not offered."
 licence_url = "https://github.com/festeraeb/movidius-rust"
 hardware = "Linux x86-64 and an Intel NCS1 USB stick (USB id 03e7:2150 or 03e7:f63b). Needs a compiled NCSDK v1 .graph file (see the note)."
 kind = "vision"

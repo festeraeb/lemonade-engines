@@ -4,7 +4,8 @@
 //! that already runs), registers it with Lemonade as a provider through the `lemonade` CLI, and tests it
 //! with a chat sent through Lemonade. Lemonade itself is not modified.
 //!
-//! Env: LE_LISTEN (127.0.0.1:13500), LE_CATALOG (built-in assets/engines.toml), LE_HOME (~/.local/share/lemonade-engines),
+//! Env: LE_LISTEN (127.0.0.1:13500), LE_CATALOG (a local catalogue file, unsigned, overrides everything),
+//!      LE_CATALOG_URL (signed online catalogue, see catalog.rs), LE_HOME (~/.local/share/lemonade-engines),
 //!      LEMONADE_HOST / LEMONADE_PORT (127.0.0.1 / 13305), LEMONADE_API_KEY (passed through to Lemonade when set).
 
 use std::{
@@ -28,11 +29,19 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncWriteExt, process::Command, sync::Mutex};
 
+mod catalog;
+
 const PAGE: &str = include_str!("../assets/index.html");
 const DEFAULT_CATALOG: &str = include_str!("../assets/engines.toml");
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-struct Catalog {
+pub struct Catalog {
+    /// Integer, higher = newer. A remote catalogue is used only when this is higher than the one in use.
+    #[serde(default)]
+    version: Option<u64>,
+    /// ISO date the catalogue was published.
+    #[serde(default)]
+    published: Option<String>,
     engine: Vec<Engine>,
 }
 
@@ -107,6 +116,12 @@ struct Engine {
     /// A file the user has to supply (we do not ship it): copied from `env` on install, or reported as missing.
     #[serde(default)]
     user_file: Option<UserFile>,
+    /// What we changed in the upstream engine (shown in ENGINES.md).
+    #[serde(default)]
+    modified: Option<String>,
+    /// Where and what passed (shown in ENGINES.md).
+    #[serde(default)]
+    tested: Option<String>,
     /// Third-party firmware we must not redistribute: shown to the user, downloaded only after an explicit accept.
     #[serde(default)]
     firmware: Option<Firmware>,
@@ -174,7 +189,8 @@ impl Engine {
 }
 
 struct App {
-    catalog: Catalog,
+    /// The catalogue in use; swapped when a newer signed one arrives.
+    active: std::sync::RwLock<Arc<catalog::Active>>,
     home: PathBuf,
     lemonade: String,
     http: reqwest::Client,
@@ -188,8 +204,12 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 impl App {
-    fn engine(&self, id: &str) -> Option<&Engine> {
-        self.catalog.engine.iter().find(|e| e.id == id)
+    fn cat(&self) -> Arc<catalog::Active> {
+        self.active.read().unwrap().clone()
+    }
+
+    fn engine(&self, id: &str) -> Option<Engine> {
+        self.cat().catalog.engine.iter().find(|e| e.id == id).cloned()
     }
 
     fn dir(&self, id: &str) -> PathBuf {
@@ -412,7 +432,7 @@ struct FirmwareReq {
 }
 
 async fn firmware(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<FirmwareReq>>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let Some(fw) = e.firmware.clone() else { return Json(json!({"ok": true, "message": "This engine needs no firmware."})).into_response() };
     let dest = app.dir(&id).join(&fw.dest);
     if dest.is_file() { return Json(json!({"ok": true, "message": "Firmware already in place."})).into_response(); }
@@ -427,7 +447,7 @@ async fn firmware(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body:
 
 /// Look for the stick (or whatever hardware `requires_usb` names) and say plainly if it is not there.
 async fn usb(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     if e.requires_usb.is_empty() { return Json(json!({"ok": true, "message": "No USB device needed."})).into_response(); }
     if !cfg!(target_os = "linux") {
         return err(StatusCode::NOT_IMPLEMENTED, "USB detection here only works on Linux, and this engine only runs there.");
@@ -443,6 +463,20 @@ async fn page() -> Html<&'static str> {
     Html(PAGE)
 }
 
+/// Which catalogue is in use (served as GET /api/catalog).
+async fn catalog_info(State(app): State<Shared>) -> Json<Value> {
+    let a = app.cat();
+    let ids: Vec<&str> = a.catalog.engine.iter().map(|e| e.id.as_str()).collect();
+    Json(json!({"source": a.source, "version": a.version, "published": a.published, "verified": a.verified, "engines": ids}))
+}
+
+/// The user has looked at this engine (pressed Set up or Dismiss): drop its "New" badge.
+async fn seen(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+    if app.engine(&id).is_none() { return err(StatusCode::NOT_FOUND, "unknown engine"); }
+    catalog::mark_seen(&app.home, &id);
+    Json(json!({"ok": true})).into_response()
+}
+
 async fn state(State(app): State<Shared>) -> Json<Value> {
     let health = app.lemonade_req(app.http.get(format!("{}/api/v1/health", app.lemonade))).timeout(Duration::from_secs(3)).send().await;
     let (lemonade_ok, version) = match health {
@@ -451,11 +485,16 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
         Err(e) => (false, Some(if e.is_timeout() { "no answer".into() } else { "not reachable".into() })),
     };
     let providers = app.providers().await;
+    let active = app.cat();
+    let cat = &active.catalog;
+    let ids: Vec<String> = cat.engine.iter().map(|e| e.id.clone()).collect();
+    // Engines in this catalogue the user has not seen yet get a "New" badge.
+    let fresh: Vec<String> = catalog::load_seen(&app.home).map(|s| catalog::new_ids(&ids, &s)).unwrap_or_default();
     // Probe every engine at the same time. A refused connection to a stopped engine takes about 2 s on Windows, so six
     // stopped engines probed one after another made this call take 12 s and the page showed "server answering" long
     // after Stop had worked.
     let mut probes = tokio::task::JoinSet::new();
-    for (i, e) in app.catalog.engine.iter().enumerate() {
+    for (i, e) in cat.engine.iter().enumerate() {
         let app = app.clone();
         let id = e.id.clone();
         let base = app.base(e);
@@ -469,12 +508,12 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
             (i, up, models, listed)
         });
     }
-    let mut probed = vec![(false, vec![], false); app.catalog.engine.len()];
+    let mut probed = vec![(false, vec![], false); cat.engine.len()];
     while let Some(r) = probes.join_next().await {
         if let Ok((i, up, models, listed)) = r { probed[i] = (up, models, listed); }
     }
     let mut engines = vec![];
-    for (i, e) in app.catalog.engine.iter().enumerate() {
+    for (i, e) in cat.engine.iter().enumerate() {
         let base = app.base(e);
         let (up, models, listed) = probed[i].clone();
         // Lemonade keeps the provider across restarts but forgets its runtime key, and then lists no models.
@@ -482,7 +521,7 @@ async fn state(State(app): State<Shared>) -> Json<Value> {
         let registered = listed && !models.is_empty();
         let running_here = app.children.lock().await.contains_key(&e.id);
         engines.push(json!({
-            "engine": e, "installed": app.installed(e), "up": up, "running_here": running_here,
+            "engine": e, "new": fresh.contains(&e.id), "installed": app.installed(e), "up": up, "running_here": running_here,
             "registered": registered, "models": models, "base": base,
             "accepted": app.dir(&e.id).join("licence-accepted").exists(),
             "available": e.mode == "attach" || e.available_here(),
@@ -648,7 +687,7 @@ fn tail(path: &Path, n: usize) -> String {
 }
 
 async fn install(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<InstallReq>>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let req = body.map(|b| b.0).unwrap_or_default();
     let dir = app.dir(&id);
     if e.accept_licence {
@@ -698,7 +737,7 @@ async fn wait_up(app: &App, base: &str, secs: u64) -> bool {
 }
 
 async fn start(State(app): State<Shared>, UrlPath(id): UrlPath<String>, body: Option<Json<StartReq>>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let Some(base) = app.base(&e) else { return err(StatusCode::BAD_REQUEST, "engine has no address") };
     if e.mode == "attach" {
         return if wait_up(&app, &base, 3).await {
@@ -785,7 +824,7 @@ async fn stop(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Respon
     let child = app.children.lock().await.remove(&id);
     let had_child = child.is_some();
     if let Some(c) = child { stop_child(c).await; }
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     if !e.stop_args.is_empty() {
         let out = app.command(&e, app.exe_path(&e), &e.stop_args).output().await;
         return match out {
@@ -809,7 +848,7 @@ async fn shutdown_signal() {
 }
 
 async fn plan(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     if let Some(fw) = &e.firmware {
         if !app.dir(&id).join(&fw.dest).is_file() { return Json(json!({"ok": true, "plan": fw.plan_text(&e.name)})).into_response(); }
     }
@@ -836,7 +875,7 @@ async fn log_tail(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Re
 }
 
 async fn register(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let Some(base) = app.base(&e) else { return err(StatusCode::BAD_REQUEST, "engine has no address") };
     if e.accept_licence && !app.dir(&id).join("licence-accepted").exists() {
         return err(StatusCode::FORBIDDEN, "Accept the licence first.");
@@ -900,7 +939,7 @@ const EMBED_TEST: [&str; 3] = [
 ];
 
 async fn test(State(app): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
-    let Some(e) = app.engine(&id).cloned() else { return err(StatusCode::NOT_FOUND, "unknown engine") };
+    let Some(e) = app.engine(&id) else { return err(StatusCode::NOT_FOUND, "unknown engine") };
     let models = app.lemonade_models(&id).await;
     let model = match &e.test_model {
         Some(m) if models.iter().any(|x| x == &format!("{id}.{m}")) => format!("{id}.{m}"),
@@ -1007,20 +1046,82 @@ fn open_browser(url: &str) {
     }
 }
 
+/// Fetch the signed online catalogue now and every 6 hours. A failure of any kind keeps the catalogue in use.
+async fn catalog_refresh_loop(app: Shared, url: String) {
+    loop {
+        refresh_catalog(&app, &url, catalog::CATALOG_PUBLIC_KEY_HEX).await;
+        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+    }
+}
+
+async fn refresh_catalog(app: &Shared, url: &str, public_hex: &str) {
+    let http = app.http.clone();
+    match catalog::fetch_verified(|u| { let h = http.clone(); async move { catalog::http_fetch(&h, u).await } }, url, public_hex).await {
+        Ok(remote) => match catalog::consider(&app.cat(), remote) {
+            Ok(a) => {
+                println!("catalogue: using remote version {} (published {}), signature verified", a.version, a.published.as_deref().unwrap_or("?"));
+                *app.active.write().unwrap() = Arc::new(a);
+            }
+            Err(why) => println!("catalogue: keeping {} version {}: {why}", app.cat().source, app.cat().version),
+        },
+        // Offline or unsigned is normal: stay quiet apart from one log line.
+        Err(why) => println!("catalogue: keeping {} version {}: online catalogue not used ({why})", app.cat().source, app.cat().version),
+    }
+}
+
+/// Maintainer commands that run instead of the server. Returns true when one ran.
+///   --gen-key PATH               make a signing key at PATH (refuses to overwrite), print the public key
+///   --sign-catalog KEY FILE      write FILE.sig (hex ed25519 signature over FILE's exact bytes)
+///   --print-engines-md [FILE]    print ENGINES.md from FILE (default: the built-in catalogue)
+fn run_command_line() -> bool {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let fail = |m: String| -> bool { eprintln!("{m}"); std::process::exit(1) };
+    match args.first().map(String::as_str) {
+        Some("--gen-key") if args.len() == 2 => match catalog::generate_key(Path::new(&args[1])) {
+            Ok(public) => println!("private key written to {} (keep it outside the repo)\npublic key (paste into CATALOG_PUBLIC_KEY_HEX in src/catalog.rs):\n{public}", args[1]),
+            Err(e) => return fail(e),
+        },
+        Some("--sign-catalog") if args.len() == 3 => {
+            let bytes = std::fs::read(&args[2]).unwrap_or_else(|e| { eprintln!("{}: {e}", args[2]); std::process::exit(1) });
+            // Refuse to sign something the Stand could not use.
+            if let Err(e) = toml::from_str::<Catalog>(&String::from_utf8_lossy(&bytes)) { return fail(format!("catalogue does not parse: {e}")); }
+            match catalog::sign(Path::new(&args[1]), &bytes).and_then(|sig| std::fs::write(format!("{}.sig", args[2]), format!("{sig}\n")).map_err(|e| e.to_string())) {
+                Ok(()) => println!("wrote {}.sig", args[2]),
+                Err(e) => return fail(e),
+            }
+        }
+        Some("--print-engines-md") if args.len() <= 2 => {
+            let text = match args.get(1) { Some(p) => std::fs::read_to_string(p).unwrap_or_else(|e| { eprintln!("{p}: {e}"); std::process::exit(1) }), None => DEFAULT_CATALOG.to_string() };
+            match toml::from_str::<Catalog>(&text) { Ok(c) => print!("{}", catalog::engines_md(&c)), Err(e) => return fail(format!("catalogue does not parse: {e}")) }
+        }
+        Some(a) if a.starts_with("--") => return fail(format!("unknown or incomplete option {a}; see the comment above run_command_line")),
+        _ => return false,
+    }
+    true
+}
+
 #[tokio::main]
 async fn main() {
     let env = |k: &str, d: &str| std::env::var(k).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
-    let catalog_text = match std::env::var("LE_CATALOG") {
-        Ok(p) => std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("LE_CATALOG {p}: {e}")),
-        Err(_) => DEFAULT_CATALOG.to_string(),
+    if run_command_line() { return; }
+    let env_catalog = std::env::var("LE_CATALOG").ok();
+    let catalog_text = match &env_catalog {
+        Some(p) => std::fs::read_to_string(p).unwrap_or_else(|e| panic!("LE_CATALOG {p}: {e}")),
+        None => DEFAULT_CATALOG.to_string(),
     };
     let catalog: Catalog = toml::from_str(&catalog_text).expect("engine catalogue does not parse");
+    let active = catalog::Active::new(catalog, if env_catalog.is_some() { "env" } else { "builtin" }, false);
+    println!("catalogue: {} version {} ({})", active.source, active.version, if env_catalog.is_some() { "LE_CATALOG, unsigned, online catalogue off" } else { "built in" });
     let home = PathBuf::from(env("LE_HOME", &format!("{}/.local/share/lemonade-engines", env("HOME", "."))));
     let lemonade = format!("http://{}:{}", env("LEMONADE_HOST", "127.0.0.1"), env("LEMONADE_PORT", "13305"));
-    let app = Arc::new(App { catalog, home, lemonade, http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) });
+    let ids: Vec<String> = active.catalog.engine.iter().map(|e| e.id.clone()).collect();
+    catalog::init_seen(&home, &ids); // first run ever: no badges on a fresh install
+    let app = Arc::new(App { active: std::sync::RwLock::new(Arc::new(active)), home, lemonade, http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) });
     let router = Router::new()
         .route("/", get(page))
         .route("/api/state", get(state))
+        .route("/api/catalog", get(catalog_info))
+        .route("/api/engines/{id}/seen", post(seen))
         .route("/api/engines/{id}/install", post(install))
         .route("/api/engines/{id}/start", post(start))
         .route("/api/engines/{id}/stop", post(stop))
@@ -1032,6 +1133,10 @@ async fn main() {
         .route("/api/engines/{id}/firmware", post(firmware))
         .route("/api/engines/{id}/log", get(log_tail))
         .with_state(app.clone());
+    if env_catalog.is_none() {
+        let url = env("LE_CATALOG_URL", catalog::DEFAULT_CATALOG_URL);
+        tokio::spawn(catalog_refresh_loop(app.clone(), url));
+    }
     let addr: SocketAddr = env("LE_LISTEN", "127.0.0.1:13500").parse().expect("LE_LISTEN");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     println!("lemonade-engines on http://{addr}");
@@ -1112,6 +1217,58 @@ mod tests {
         assert!(burn.files.iter().all(|f| f.source.starts_with("https://") && f.sha256.as_ref().map_or(false, |h| h.len() == 64)), "burn files must be pinned downloads");
         let cake = c.engine.iter().find(|e| e.id == "cake").unwrap();
         assert!(cake.accept_licence, "Cake is non-commercial: it must ask first");
+    }
+
+    /// An App on the built-in catalogue, for the catalogue-refresh tests.
+    fn app_on_builtin() -> Shared {
+        let c: Catalog = toml::from_str(DEFAULT_CATALOG).unwrap();
+        Arc::new(App { active: std::sync::RwLock::new(Arc::new(catalog::Active::new(c, "builtin", false))), home: std::env::temp_dir(), lemonade: String::new(), http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) })
+    }
+
+    #[tokio::test]
+    async fn refresh_falls_back_when_the_fetch_fails() {
+        let app = app_on_builtin();
+        // Nothing listens on port 1 of loopback: the fetch fails, the built-in catalogue stays.
+        refresh_catalog(&app, "http://127.0.0.1:1/engines.toml", &hex::encode([1u8; 32])).await;
+        assert_eq!(app.cat().source, "builtin");
+    }
+
+    #[tokio::test]
+    async fn refresh_uses_a_newer_signed_catalog_from_a_local_server() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[42u8; 32]);
+        let public = hex::encode(sk.verifying_key().to_bytes());
+        let builtin: Catalog = toml::from_str(DEFAULT_CATALOG).unwrap();
+        let body = format!("version = {}\npublished = \"2099-01-01\"\n{}", builtin.version.unwrap() + 1,
+            DEFAULT_CATALOG.lines().filter(|l| !l.starts_with("version =") && !l.starts_with("published =")).collect::<Vec<_>>().join("\n"));
+        let sig = hex::encode(sk.sign(body.as_bytes()).to_bytes());
+        let (b2, s2) = (body.clone(), sig.clone());
+        let router = Router::new().route("/engines.toml", get(move || async move { b2 })).route("/engines.toml.sig", get(move || async move { s2 }));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/engines.toml", l.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(l, router).await.unwrap() });
+
+        let app = app_on_builtin();
+        // Wrong key: rejected, built-in stays.
+        refresh_catalog(&app, &url, &hex::encode([9u8; 32])).await;
+        assert_eq!(app.cat().source, "builtin");
+        // Right key: used.
+        refresh_catalog(&app, &url, &public).await;
+        let a = app.cat();
+        assert_eq!((a.source, a.version, a.verified), ("remote", builtin.version.unwrap() + 1, true));
+        // Same version again: ignored.
+        refresh_catalog(&app, &url, &public).await;
+        assert_eq!(app.cat().version, builtin.version.unwrap() + 1);
+    }
+
+    #[test]
+    fn published_catalog_is_usable_and_engines_md_is_current() {
+        let published = include_str!("../catalog/engines.toml");
+        let p: Catalog = toml::from_str(published).unwrap();
+        let b: Catalog = toml::from_str(DEFAULT_CATALOG).unwrap();
+        assert!(p.version.unwrap() >= b.version.unwrap(), "published catalogue is older than the built-in one");
+        assert!(p.published.is_some());
+        assert_eq!(catalog::engines_md(&p), include_str!("../ENGINES.md"), "ENGINES.md is stale: run lemonade-engines --print-engines-md catalog/engines.toml > ENGINES.md");
     }
 
     /// A directory under the system temp dir, removed when the test ends.
@@ -1200,7 +1357,7 @@ mod tests {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let home = std::env::temp_dir().join(format!("le-preload-{}-{n}", std::process::id()));
-        let app = App { catalog: Catalog { engine: vec![e.clone()] }, home, lemonade: String::new(), http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) };
+        let app = App { active: std::sync::RwLock::new(Arc::new(catalog::Active::new(Catalog { version: None, published: None, engine: vec![e.clone()] }, "builtin", false))), home, lemonade: String::new(), http: reqwest::Client::new(), children: Mutex::new(HashMap::new()) };
         (app, e)
     }
 
