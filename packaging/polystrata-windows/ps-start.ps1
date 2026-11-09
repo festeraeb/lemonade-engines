@@ -1,6 +1,7 @@
 # Lemonade Stand start for PolyStrata and Nauti-Strata on Windows: ps-start.ps1 PORT DIR SRC
 # Takes the run config setup wrote, sets this engine's port, writes strata-stand.json and runs the server.
-#   NAUTI_STRATA_GPU       card to use, numbered as nvidia-smi numbers them (default: the one setup chose)
+#   STRATA_GPU             card to use, numbered as nvidia-smi numbers them (default: the one setup chose);
+#                          NAUTI_STRATA_GPU is the older name, still read when STRATA_GPU is unset
 #   NAUTI_STRATA_THINKING  thinking level when a request names none: none (default), low, medium or high
 # NautiBurn routing scrapes are OFF by default (they record each answer's token ids and routed experts). To turn
 # them on, write a folder path into DIR\nautiburn-scrape-dir (or set NAUTIBURN_SCRAPE_DIR); delete the file to turn
@@ -16,7 +17,8 @@ $cfg | Add-Member -Force port $Port
 $cfg | Add-Member -Force open_browser $false
 $think = if ($env:NAUTI_STRATA_THINKING) { $env:NAUTI_STRATA_THINKING } else { "none" }
 $cfg | Add-Member -Force reasoning_effort $think
-if ($env:NAUTI_STRATA_GPU) { $cfg | Add-Member -Force gpu @([int]$env:NAUTI_STRATA_GPU) }
+$gpuChoice = if ($env:STRATA_GPU) { $env:STRATA_GPU } else { $env:NAUTI_STRATA_GPU }
+if ($gpuChoice) { $cfg | Add-Member -Force gpu @([int]$gpuChoice) }
 $scrape = $env:NAUTIBURN_SCRAPE_DIR
 $flag = Join-Path $Dir "nautiburn-scrape-dir"
 if (-not $scrape -and (Test-Path $flag)) { $scrape = "$(Get-Content $flag -TotalCount 1)".Trim() }

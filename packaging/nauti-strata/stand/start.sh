@@ -1,7 +1,8 @@
 #!/bin/sh
 # Lemonade Stand start for Nauti-Strata.  Usage: start.sh PORT DIR
 # Writes strata-stand.json (rewritten every start) and runs PolyStrata's server on 127.0.0.1:PORT.
-#   NAUTI_STRATA_GPU      card to use, numbered as nvidia-smi numbers them (default 0)
+#   STRATA_GPU            card to use, numbered as nvidia-smi numbers them (default 0);
+#                         NAUTI_STRATA_GPU is the older name, still read when STRATA_GPU is unset
 #   NAUTI_STRATA_CONTEXT  context length (default 8192)
 #   NAUTI_STRATA_THINKING thinking level when a request names none: none (default), low, medium or high
 # NautiBurn routing scrapes are OFF by default.  They record each answer's token ids and routed experts.
@@ -11,7 +12,7 @@ set -eu
 PORT="${1:?usage: start.sh PORT DIR}"; DIR="${2:?usage: start.sh PORT DIR}"; cd "$DIR"
 . ./stand/model.env
 if grep -qw avx2 /proc/cpuinfo; then EXE=bin/strata-poly-avx2; else EXE=bin/strata-poly-avx; fi
-GPU="${NAUTI_STRATA_GPU:-0}"
+GPU="${STRATA_GPU:-${NAUTI_STRATA_GPU:-0}}"
 SCRAPE="${NAUTIBURN_SCRAPE_DIR:-}"
 if [ -z "$SCRAPE" ] && [ -s nautiburn-scrape-dir ]; then SCRAPE="$(head -n1 nautiburn-scrape-dir)"; fi
 CC="$(nvidia-smi -i "$GPU" --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' .' || true)"
